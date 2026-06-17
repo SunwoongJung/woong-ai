@@ -138,7 +138,6 @@ CREATE TABLE IF NOT EXISTS shipping_pending (
 CREATE TABLE IF NOT EXISTS resources (
     resource_id TEXT PRIMARY KEY,
     resource_type TEXT NOT NULL,      -- WORKER | FORKLIFT
-    count INTEGER NOT NULL,
     shift_start TEXT,
     shift_end TEXT,
     active_flag INTEGER DEFAULT 1

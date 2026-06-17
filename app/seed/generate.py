@@ -323,12 +323,14 @@ def gen_shipping_pending(orders) -> list[dict]:
 
 
 def gen_resources() -> list[dict]:
-    return [
-        dict(resource_id="W-01", resource_type="WORKER", count=3,
-             shift_start="08:00", shift_end="17:00", active_flag=1),
-        dict(resource_id="F-01", resource_type="FORKLIFT", count=2,
-             shift_start="08:00", shift_end="17:00", active_flag=1),
-    ]
+    rows = []
+    for i in range(1, 4):
+        rows.append(dict(resource_id=f"W-{i:02d}", resource_type="WORKER",
+                         shift_start="08:00", shift_end="17:00", active_flag=1))
+    for i in range(1, 3):
+        rows.append(dict(resource_id=f"F-{i:02d}", resource_type="FORKLIFT",
+                         shift_start="08:00", shift_end="17:00", active_flag=1))
+    return rows
 
 
 def gen_process_time_params() -> list[dict]:

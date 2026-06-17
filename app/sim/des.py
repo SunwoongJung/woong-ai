@@ -18,6 +18,7 @@ import simpy
 
 from config import settings
 from db.database import get_connection
+from resmgmt import ensure_resource_rows_schema
 from sim.forecast import fit_demand, scan_inventory_risk
 from tools.common import q
 
@@ -50,6 +51,7 @@ def _sample_time(p: dict, rng) -> float:
 
 
 def _load_static():
+    ensure_resource_rows_schema()
     products = {r["sku"]: r for r in q("SELECT * FROM products")}
     zones = {r["zone_id"]: dict(r) for r in q("SELECT * FROM zones")}
     sku_qty, sku_zone, zone_occ = {}, {}, {z: 0 for z in zones}
@@ -61,7 +63,9 @@ def _load_static():
         if r["sku"] not in best or r["qty"] > best[r["sku"]]:
             best[r["sku"]] = r["qty"]
             sku_zone[r["sku"]] = r["zone_id"]
-    resources = {r["resource_type"]: r["count"] for r in q("SELECT resource_type, count FROM resources WHERE active_flag=1")}
+    resources = {r["resource_type"]: r["count"] for r in q("""SELECT resource_type, COUNT(*) count
+                                                              FROM resources WHERE active_flag=1
+                                                              GROUP BY resource_type""")}
     ptp = {r["stage"]: dict(r) for r in q("SELECT * FROM process_time_params")}
     return products, zones, sku_qty, sku_zone, zone_occ, resources, ptp
 
@@ -273,7 +277,10 @@ def _pctl(vals, p):
 
 def _resolved_counts(scenario):
     """시나리오 적용 후 실제 작업자/지게차/팀 수."""
-    res = {r["resource_type"]: r["count"] for r in q("SELECT resource_type, count FROM resources WHERE active_flag=1")}
+    ensure_resource_rows_schema()
+    res = {r["resource_type"]: r["count"] for r in q("""SELECT resource_type, COUNT(*) count
+                                                       FROM resources WHERE active_flag=1
+                                                       GROUP BY resource_type""")}
     sc = scenario or {}
     w = max(0, res.get("WORKER", 3) + sc.get("worker_delta", 0))
     f = max(0, res.get("FORKLIFT", 2) + sc.get("forklift_delta", 0))

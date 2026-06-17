@@ -477,23 +477,72 @@ function codeCard(s, x, y, w, h, head, code) {
 {
   const s = pres.addSlide();
   s.background = { color: WHITE };
-  slideTitle(s, "RAG · DESIGN", "RAG ① Adaptive vs Agentic · ALR+Sufficient 결합");
+  slideTitle(s, "RAG · DESIGN", "RAG ① Adaptive vs Agentic — 검색 여부 + 품질 루프");
   pcard(s, 0.5, 1.5, 4.5, 1.95, "Adaptive RAG — 진입 게이트",
     "“검색을 할까?”를 결정\n· 단순 조회(입고예정·재고)는 검색 생략 → 비용·지연 ↓\n· 근거·정책·SOP·산식 질문만 검색\n· 구현: rag_decision_node (intent ∈ RAG_INTENTS)", false);
   pcard(s, 5.0, 1.5, 4.5, 1.95, "Agentic RAG — 품질 루프",
     "“이 근거로 충분한가?”를 반복\n· 검색 → 리랭크 → 충분성 판정, 부족 시 query rewrite 재검색(≤2)\n· 충분 근거 없으면 abstain(“문서 근거가 부족합니다”)\n· 구현: retriever.retrieve", true);
   s.addText("Adaptive = 문 앞에서 ‘들어갈지’ 결정  ·  Agentic = 안에서 ‘충분해질 때까지’ 반복",
     { x: 0.5, y: 3.56, w: 9.0, h: 0.32, fontFace: F, fontSize: 11.5, italic: true, color: ACCENT, align: "center", margin: 0 });
-  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 3.95, w: 9.0, h: 1.55, rectRadius: 0.08, fill: { color: DARK } });
-  s.addText("ALR + Sufficient Context + PRISM — 역할이 겹치지 않게 결합", { x: 0.75, y: 4.06, w: 8.5, h: 0.3, fontFace: F, fontSize: 12.5, bold: true, color: "7FD1CD", margin: 0 });
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 4.0, w: 9.0, h: 1.25, rectRadius: 0.08, fill: { color: DARK } });
+  s.addText("이 둘을 받치는 3가지 사상", { x: 0.75, y: 4.12, w: 8.5, h: 0.3, fontFace: F, fontSize: 12.5, bold: true, color: "7FD1CD", margin: 0 });
   s.addText([
-    { text: "ALR(DocSeeker 개념)  ", options: { bold: true, color: WHITE } },
-    { text: "인덱싱 때 근거 메타(answerable_intents·evidence_summary) 사전부여 = 근거 구조·사전 라우팅 (chunker.py)", options: { color: "CFD8DC", breakLine: true } },
-    { text: "PRISM  ", options: { bold: true, color: WHITE } },
-    { text: "relevance+contribution+evidence_span 리랭커 = 설명용 근거 span 추출 (prism_rerank)", options: { color: "CFD8DC", breakLine: true } },
-    { text: "Sufficient(Google)  ", options: { bold: true, color: WHITE } },
-    { text: "‘답해도 되나’ 게이트 = 환각 차단·abstain. ALR만으론 멈추는 규칙이 없어 환각 위험 → 보완 (sufficient_context)", options: { color: "CFD8DC" } },
-  ], { x: 0.75, y: 4.38, w: 8.5, h: 1.08, fontFace: F, fontSize: 9.6, valign: "top", margin: 0, lineSpacingMultiple: 1.04 });
+    { text: "ALR ", options: { bold: true, color: WHITE } },
+    { text: "근거 구조·사전 라우팅      ", options: { color: "CFD8DC" } },
+    { text: "PRISM ", options: { bold: true, color: WHITE } },
+    { text: "설명용 근거 추출      ", options: { color: "CFD8DC" } },
+    { text: "Sufficient ", options: { bold: true, color: WHITE } },
+    { text: "환각 차단 게이트", options: { color: "CFD8DC", breakLine: true } },
+    { text: "→ 각각이 무엇이고, 어떤 장점 때문에 넣어 어떻게 결합했는지는 다음 장에서 설명", options: { color: "9FC7C4", italic: true } },
+  ], { x: 0.75, y: 4.52, w: 8.5, h: 0.65, fontFace: F, fontSize: 11, valign: "top", margin: 0, lineSpacingMultiple: 1.05 });
+}
+
+// =======================================================
+// [D1b] RAG · ALR·Sufficient·PRISM — 무엇이고, 왜 결합했나
+// =======================================================
+{
+  const s = pres.addSlide();
+  s.background = { color: WHITE };
+  slideTitle(s, "RAG · WHY COMBINE", "RAG ② ALR · Sufficient · PRISM — 무엇이고, 왜 결합했나");
+  s.addText("세 기법은 역할이 겹치지 않는다 — 질문 분석, 근거 정제, 생성 판단을 나눠 단일 RAG의 약점을 보완한다",
+    { x: 0.5, y: 1.12, w: 9.33, h: 0.32, fontFace: F, fontSize: 11.5, color: MUTED, margin: 0 });
+  // 실행 흐름 (순차 파이프라인)
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 1.5, w: 9.33, h: 0.5, rectRadius: 0.08, fill: { color: TINT } });
+  s.addText([
+    { text: "질문 입력 ", options: { bold: true, color: TEXT } }, { text: "→  ", options: { color: MUTED } },
+    { text: "ALR ", options: { bold: true, color: ACCENT } }, { text: "→  Retrieval  →  ", options: { color: MUTED } },
+    { text: "PRISM ", options: { bold: true, color: ACCENT } }, { text: "→  ", options: { color: MUTED } },
+    { text: "Sufficient Context ", options: { bold: true, color: ACCENT } }, { text: "→  ", options: { color: MUTED } },
+    { text: "Answer / Re-search / Abstain", options: { bold: true, color: TEXT } },
+  ], { x: 0.5, y: 1.5, w: 9.33, h: 0.5, fontFace: F, fontSize: 10.5, align: "center", valign: "middle", margin: 0 });
+  function whyCard(x, name, tint, what, adv, role) {
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y: 2.15, w: 2.99, h: 2.45, rectRadius: 0.07, fill: { color: tint ? TINT : LIGHT }, shadow: shadow() });
+    s.addText(name, { x: x + 0.18, y: 2.27, w: 2.63, h: 0.5, fontFace: F, fontSize: 10.5, bold: true, color: ACCENT, valign: "top", margin: 0 });
+    s.addText([
+      { text: "무엇  ", options: { bold: true, color: TEXT } }, { text: what, options: { color: MUTED, breakLine: true } },
+      { text: "", options: { fontSize: 4, breakLine: true } },
+      { text: "강점  ", options: { bold: true, color: TEXT } }, { text: adv, options: { color: MUTED, breakLine: true } },
+      { text: "", options: { fontSize: 4, breakLine: true } },
+      { text: "역할  ", options: { bold: true, color: ACCENT } }, { text: role, options: { color: MUTED } },
+    ], { x: x + 0.18, y: 2.84, w: 2.63, h: 1.68, fontFace: F, fontSize: 8.8, valign: "top", margin: 0, lineSpacingMultiple: 1.04 });
+  }
+  whyCard(0.5, "ALR: Analysis–Localization–Reasoning", false,
+    "DocSeeker의 구조화된 문서 추론 흐름. 질문 의도를 먼저 분석하고, 필요한 근거 위치를 문서에서 식별한 뒤 그 근거로 추론한다.",
+    "검색과 추론을 분리해 ‘어디를 근거로 답했는지’가 명확. 긴 문서의 노이즈를 줄이고 근거 추적성을 높인다.",
+    "DocSeeker 모델은 도입하지 않고 ALR 개념·흐름만 차용. RAG 파이프라인에서 질문 분석·근거 후보 라우팅 기준으로 사용.");
+  whyCard(3.67, "PRISM: Evidence-aware Reranker", true,
+    "유사도 점수만 쓰는 reranker가 아니라 relevance 판단·contribution·근거 구절(evidence passage)을 함께 생성하는 재랭킹.",
+    "‘왜 근거인지’와 ‘답변 기여도’를 함께 제공 → 검색 결과를 그대로 넣지 않고 핵심 근거 중심으로 context를 정제.",
+    "검색된 후보 청크를 재평가해 답변에 쓸 근거 구절과 설명 가능한 contribution을 생성.");
+  whyCard(6.84, "Sufficient Context: Answerability Gate", false,
+    "정제된 context만으로 질문에 답할 수 있는지 판단하는 품질 게이트.",
+    "근거 부족 상태의 억지 답변을 차단. 불충분하면 추가 검색·재질문 또는 답변 보류(abstain).",
+    "답변 생성 직전 근거 충분성을 판단 — 충분하면 답변, 부족하면 재검색하거나 ‘근거 부족으로 답변 불가’.");
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 4.72, w: 9.33, h: 0.8, rectRadius: 0.07, fill: { color: DARK } });
+  s.addText([
+    { text: "결합  ", options: { bold: true, color: "7FD1CD" } },
+    { text: "ALR은 질문 분석·근거 탐색을 구조화하고, PRISM은 후보를 근거 중심으로 재정렬·정제하며, Sufficient Context는 최종 답변 가능 여부를 판단한다. → 단순 유사도 RAG의 약점(잘못된 근거 선택·불충분한 context 답변·환각)을 함께 줄인다.", options: { color: "E6EDEF" } },
+  ], { x: 0.72, y: 4.72, w: 8.9, h: 0.8, fontFace: F, fontSize: 9.5, valign: "middle", margin: 0, lineSpacingMultiple: 1.04 });
 }
 
 // =======================================================
@@ -502,7 +551,7 @@ function codeCard(s, x, y, w, h, head, code) {
 {
   const s = pres.addSlide();
   s.background = { color: WHITE };
-  slideTitle(s, "RAG · VECTOR DB", "RAG ② Vector DB 구성과 검색 파이프라인");
+  slideTitle(s, "RAG · VECTOR DB", "RAG ③ Vector DB 구성과 검색 파이프라인");
   pcard(s, 0.5, 1.55, 4.35, 3.55, "Vector DB · 인덱스 구성",
     "· Vector DB: FAISS IndexFlatIP\n   (L2 정규화 → 코사인 유사도)\n· 임베딩: text-embedding-3-small\n· 청킹: 정책 md 6종 · ## 헤딩 단위\n   (LLM 없이 결정적 메타 부여)\n· 메타: source·document_type·domain·\n   section·answerable_intents·evidence_summary\n· 인덱스: faiss.index + chunks.json\n   정책 변경 시 전체 재인덱싱\n· 향후: PostgreSQL/pgvector 전환", false);
   pcard(s, 5.05, 1.55, 4.45, 1.95, "검색 파이프라인 (rag/retriever.py)",

@@ -39,13 +39,14 @@
       </header>
 
       <nav class="tabs">
-        <button class="tab" data-tab="chat">💬 Agent Chat</button>
+        <button class="tab active" data-tab="chat">💬 Agent Chat</button>
         <button class="tab" data-tab="kpi">📊 KPI Dashboard</button>
-        <button class="tab active" data-tab="sim">🧊 Warehouse Simulation</button>
+        <button class="tab" data-tab="data">운영 데이터</button>
+        <button class="tab" data-tab="sim">🧊 Warehouse Simulation</button>
         <button class="tab" data-tab="approval">✓ Approval</button>
       </nav>
 
-      <section class="tab-panel" id="panel-sim">
+      <section class="tab-panel hidden" id="panel-sim">
         <div class="banner" id="baseline-banner">현재 베이스라인 — 불러오는 중...</div>
 
         <div class="controls card">
@@ -103,8 +104,91 @@
         </div>
       </section>
 
-      <section class="tab-panel hidden" id="panel-chat"><div class="card placeholder big">Agent Chat — 다음 단계</div></section>
-      <section class="tab-panel hidden" id="panel-kpi"><div class="card placeholder big">KPI Dashboard — 다음 단계</div></section>
+      <section class="tab-panel" id="panel-chat">
+        <div class="chat is-empty" id="chat-root">
+          <div class="chat-thread" id="chat-scroll">
+            <div class="thread-inner" id="thread-inner">
+              <div class="chat-empty" id="chat-empty">
+                <div class="ce-title">무엇을 도와드릴까요?</div>
+                <div class="ce-sub">오늘 할 일, 적치·피킹 추천, 재고 소진 예측, 시뮬레이션을 자연어로 물어보세요.</div>
+              </div>
+            </div>
+          </div>
+          <div class="composer-wrap">
+            <div class="composer">
+              <button class="cp-plus" id="cp-plus" title="새 대화" aria-label="새 대화">+</button>
+              <textarea id="chat-text" rows="1" placeholder="무엇이든 물어보세요"></textarea>
+              <button class="cp-send" id="chat-send" title="전송" aria-label="전송">↑</button>
+            </div>
+            <div class="chat-suggest" id="chat-suggest"></div>
+            <div class="composer-foot">Smart WMS Agent는 실수를 할 수 있습니다. 중요한 수치는 확인하세요.</div>
+          </div>
+        </div>
+      </section>
+      <section class="tab-panel hidden" id="panel-kpi">
+        <div class="kpi-board">
+          <div class="kpi-board-head">
+            <div>
+              <div class="kpi-board-title">KPI Dashboard</div>
+              <div class="kpi-board-sub" id="kpi-board-sub">운영 KPI와 최신 시뮬레이션 KPI를 함께 확인합니다.</div>
+            </div>
+            <button class="btn-ghost" id="refresh-kpi">KPI 새로고침</button>
+          </div>
+
+          <div class="kpi-row kpi-row-4" id="ops-kpi-row"></div>
+
+          <div class="grid-2">
+            <div class="card panel-min">
+              <div class="panel-head">Zone 점유율</div>
+              <div class="panel-body"><div id="zone-kpi-chart" class="chart-wrap">불러오는 중...</div></div>
+            </div>
+            <div class="card panel-min">
+              <div class="panel-head">시뮬레이션 KPI</div>
+              <div class="panel-body"><div id="sim-kpi-grid" class="metric-grid">시뮬레이션 실행 후 표시됩니다.</div></div>
+            </div>
+            <div class="card panel-min">
+              <div class="panel-head">운영 KPI 상세</div>
+              <div class="panel-body"><div id="ops-kpi-table" class="kpi-table">불러오는 중...</div></div>
+            </div>
+            <div class="card panel-min">
+              <div class="panel-head">시뮬레이션 KPI 상세</div>
+              <div class="panel-body"><div id="sim-kpi-table" class="kpi-table">시뮬레이션 실행 후 표시됩니다.</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="tab-panel hidden" id="panel-data">
+        <div class="data-board">
+          <div class="kpi-board-head">
+            <div>
+              <div class="kpi-board-title">운영 데이터</div>
+              <div class="kpi-board-sub">현재 스냅샷과 원본 운영 데이터를 조회합니다.</div>
+            </div>
+            <button class="btn-ghost" id="refresh-data">데이터 새로고침</button>
+          </div>
+
+          <div class="snapshot-grid" id="snapshot-grid"></div>
+
+          <div class="data-controls card">
+            <div class="ctrl"><label>데이터셋</label><select id="data-dataset"></select></div>
+            <div class="ctrl"><label>상태/유형</label><input id="data-status" placeholder="예: RECEIVED" /></div>
+            <div class="ctrl"><label>SKU</label><input id="data-sku" placeholder="SKU_A001" /></div>
+            <div class="ctrl"><label>Zone</label><input id="data-zone" placeholder="ZONE_A" /></div>
+            <div class="ctrl"><label>날짜</label><input id="data-date" type="date" /></div>
+            <div class="ctrl data-search"><label>검색</label><input id="data-q" placeholder="번호, 명칭, 상태 검색" /></div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head data-table-head">
+              <span id="data-table-title">원본 데이터</span>
+              <span class="head-sub" id="data-table-meta">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="raw-table-wrap"><div id="raw-data-table" class="raw-table">불러오는 중...</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
       <section class="tab-panel hidden" id="panel-approval"><div class="card placeholder big">Approval — 다음 단계</div></section>
     </main>
   </div>

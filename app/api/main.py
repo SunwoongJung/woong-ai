@@ -5,7 +5,7 @@
 """
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -21,6 +21,43 @@ app = FastAPI(title="Smart WMS Agent API", version="0.1")
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 UNIT_COST = 1000  # 단위당 명목 재고가치(원) — 총 재고 비용 KPI용(예시값)
+
+DATASETS = {
+    "products": {"table": "products", "order": "sku", "search": ["sku", "product_name", "category", "storage_type"],
+                 "filters": {"sku": "sku"}},
+    "zones": {"table": "zones", "order": "zone_id", "search": ["zone_id", "zone_name", "storage_type"],
+              "filters": {"zone_id": "zone_id"}},
+    "locations": {"table": "locations", "order": "location_id", "search": ["location_id", "location_name", "zone_id"],
+                  "filters": {"zone_id": "zone_id"}},
+    "inventory": {"table": "inventory", "order": "inventory_id DESC", "search": ["sku", "lot_no", "location_id", "status"],
+                  "filters": {"sku": "sku", "status": "status", "date": "inbound_date"}},
+    "inbound_orders": {"table": "inbound_orders", "order": "expected_date DESC, inbound_no", "search": ["inbound_no", "sku", "status", "supplier"],
+                       "filters": {"sku": "sku", "status": "status", "date": "expected_date"}},
+    "outbound_orders": {"table": "outbound_orders", "order": "due_datetime DESC, order_no", "search": ["order_no", "customer_id", "status"],
+                        "filters": {"status": "status", "date": "substr(due_datetime,1,10)"}},
+    "outbound_order_lines": {"table": "outbound_order_lines", "order": "line_id DESC", "search": ["order_no", "sku"],
+                             "filters": {"sku": "sku"}},
+    "shipping_pending": {"table": "shipping_pending", "order": "ready_datetime DESC", "search": ["pending_id", "order_no", "status"],
+                         "filters": {"status": "status", "date": "substr(ready_datetime,1,10)"}},
+    "stocking_tasks": {"table": "stocking_tasks", "order": "issued_at DESC", "search": ["stocking_task_id", "inbound_no", "location_id", "status"],
+                       "filters": {"status": "status"}},
+    "picking_tasks": {"table": "picking_tasks", "order": "issued_at DESC", "search": ["picking_task_id", "order_no", "status"],
+                      "filters": {"status": "status"}},
+    "resources": {"table": "resources", "order": "resource_type", "search": ["resource_id", "resource_type"],
+                  "filters": {"status": "active_flag"}},
+    "process_time_params": {"table": "process_time_params", "order": "stage", "search": ["stage", "distribution"],
+                            "filters": {}},
+    "demand_history": {"table": "demand_history", "order": "demand_date DESC", "search": ["sku"],
+                       "filters": {"sku": "sku", "date": "demand_date"}},
+    "action_drafts": {"table": "action_drafts", "order": "created_at DESC", "search": ["draft_id", "action_type", "target_id", "status"],
+                      "filters": {"status": "status"}},
+    "simulation_runs": {"table": "simulation_runs", "order": "created_at DESC", "search": ["sim_run_id", "version_name", "run_type"],
+                        "filters": {"status": "run_type", "version_name": "version_name"}},
+    "simulation_kpis": {"table": "simulation_kpis", "order": "kpi_id DESC", "search": ["sim_run_id", "sku", "kpi_name", "unit"],
+                        "filters": {"sku": "sku"}},
+    "simulation_events": {"table": "simulation_events", "order": "event_id DESC", "search": ["sim_run_id", "sim_time", "event_type", "detail_json"],
+                          "filters": {"status": "event_type"}},
+}
 
 
 # ---------- 요청 모델 ----------
@@ -91,6 +128,68 @@ def resources():
 @app.post("/resources/update")
 def resources_update(worker: int, forklift: int):
     return resmgmt.update_resources(worker, forklift)
+
+
+@app.get("/data/snapshot")
+def data_snapshot():
+    r = resmgmt.get_resources()
+    ops = lookups.query_operation_kpis(
+        ["saturated_zone_count", "safety_stock_below_count", "stocking_completion_rate"]
+    )["kpis"]
+    op = {x["name"]: x.get("value") for x in ops}
+    inv = q("SELECT COALESCE(SUM(qty),0) qty, COUNT(*) rows FROM inventory")[0]
+    latest = q("""SELECT version_name, run_type, created_at FROM simulation_runs
+                  WHERE version_name IS NOT NULL ORDER BY created_at DESC LIMIT 1""")
+    counts = {
+        "products": q("SELECT COUNT(*) n FROM products")[0]["n"],
+        "inventory_rows": inv["rows"],
+        "inbound_waiting": q("SELECT COUNT(*) n FROM inbound_orders WHERE status IN ('PLANNED','RECEIVED')")[0]["n"],
+        "stocking_waiting": q("SELECT COUNT(*) n FROM inbound_orders WHERE status='RECEIVED'")[0]["n"],
+        "outbound_planned": q("SELECT COUNT(*) n FROM outbound_orders WHERE status='PLANNED'")[0]["n"],
+        "shipping_pending": q("SELECT COUNT(*) n FROM shipping_pending WHERE status='PENDING'")[0]["n"],
+        "action_drafts_pending": q("SELECT COUNT(*) n FROM action_drafts WHERE status='PENDING_APPROVAL'")[0]["n"],
+    }
+    return {
+        "base_date": settings.base_date,
+        "worker": r["worker"],
+        "forklift": r["forklift"],
+        "team_count": max(0, min(r["worker"] // 2, r["forklift"])),
+        "inventory_units": inv["qty"],
+        "inventory_value": inv["qty"] * UNIT_COST,
+        "saturated_zone_count": op.get("saturated_zone_count"),
+        "safety_stock_below_count": op.get("safety_stock_below_count"),
+        "stocking_completion_rate": op.get("stocking_completion_rate"),
+        "latest_simulation": latest[0] if latest else None,
+        "counts": counts,
+    }
+
+
+@app.get("/data/{dataset}")
+def data_rows(dataset: str, limit: int = 100, offset: int = 0, status: str | None = None,
+              sku: str | None = None, zone_id: str | None = None, date: str | None = None,
+              version_name: str | None = None, qtext: str | None = None):
+    spec = DATASETS.get(dataset)
+    if not spec:
+        raise HTTPException(status_code=404, detail="지원하지 않는 데이터셋입니다.")
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
+    where, params = [], []
+    requested = {"status": status, "sku": sku, "zone_id": zone_id, "date": date, "version_name": version_name}
+    for key, value in requested.items():
+        col = spec["filters"].get(key)
+        if col and value not in (None, ""):
+            where.append(f"{col}=?")
+            params.append(value)
+    if qtext:
+        ors = [f"CAST({col} AS TEXT) LIKE ?" for col in spec["search"]]
+        where.append("(" + " OR ".join(ors) + ")")
+        params.extend([f"%{qtext}%"] * len(ors))
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    table, order = spec["table"], spec["order"]
+    total = q(f"SELECT COUNT(*) n FROM {table}{clause}", tuple(params))[0]["n"]
+    rows = q(f"SELECT * FROM {table}{clause} ORDER BY {order} LIMIT ? OFFSET ?",
+             tuple(params + [limit, offset]))
+    return {"dataset": dataset, "total": total, "limit": limit, "offset": offset, "rows": rows}
 
 
 @app.post("/chat")

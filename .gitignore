@@ -22,3 +22,6 @@ app/eval/results/
 .DS_Store
 .idea/
 .vscode/
+
+# Office 임시/잠금 파일
+~$*

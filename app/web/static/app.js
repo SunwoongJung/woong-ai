@@ -1,10 +1,45 @@
 // Smart WMS Agent — SPA (P1~P5)
 const $ = (s) => document.querySelector(s);
 let META = { base_date: null };
-let LAST = { result: null, forecast: null, comparison: null, insightTab: "inv" };
+let LAST = { result: null, forecast: null, comparison: null, insightTab: "inv", operationKpis: null };
 
 const kpi = (res, name) => (res.kpis || []).find((k) => k.kpi_name === name) || {};
 const fmtNum = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
+const safeText = (s) => (s == null ? "" : String(s)).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const KPI_META = {
+  zone_occupancy: { label: "Zone 점유율", desc: "각 Zone의 전체 용량 대비 현재 적재량 비율", unit: "%" },
+  saturated_zone_count: { label: "포화 Zone 수", desc: "점유율이 90%를 초과한 Zone 개수", unit: "개" },
+  safety_stock_below_count: { label: "안전재고 미달 SKU 수", desc: "현재 재고가 안전재고보다 낮은 SKU 개수", unit: "개" },
+  stocking_completion_rate: { label: "입고 완료율", desc: "입고 대상 중 적치 완료 상태인 건의 비율", unit: "%" },
+  shipping_delay_count: { label: "출고 지연 건수", desc: "시뮬레이션 기간 내 납기 초과가 발생한 출고 건수", unit: "건" },
+  picking_wait_minutes: { label: "피킹 대기 시간", desc: "피킹 작업이 시작되기 전까지 대기한 시간", unit: "분" },
+  resource_utilization_team: { label: "작업팀 가동률", desc: "작업자 2명과 지게차 1대로 구성된 작업팀의 평균 사용률", unit: "%" },
+  zone_max_occupancy: { label: "Zone 최대 점유율", desc: "시뮬레이션 중 각 Zone이 도달한 최대 점유율", unit: "%" },
+  expected_stockout_date: { label: "예상 재고 소진일", desc: "시뮬레이션상 특정 SKU 재고가 소진될 것으로 예상되는 날짜", unit: "일자" },
+};
+const DATASET_ORDER = ["snapshot", "products", "zones", "locations", "inventory", "inbound_orders", "outbound_orders", "outbound_order_lines", "shipping_pending", "stocking_tasks", "picking_tasks", "resources", "process_time_params", "demand_history", "action_drafts", "simulation_runs", "simulation_kpis", "simulation_events"];
+const DATASET_META = {
+  snapshot: ["현재 스냅샷", "현재 창고 상태를 집계한 요약"],
+  products: ["상품 마스터", "SKU별 상품명, 카테고리, 보관유형, 안전재고 등 기준 정보"],
+  zones: ["Zone 마스터", "창고 Zone별 보관유형, 거리, 우선순위, 최대 용량"],
+  locations: ["Location 마스터", "실제 적치 위치별 소속 Zone, 용량, 현재 점유 수량"],
+  inventory: ["재고 원장", "SKU, LOT, 위치, 수량, 입고일, 유통기한, 재고 상태"],
+  inbound_orders: ["입고 요청", "입고번호별 SKU, 수량, 예정일, 입고/적치 상태, 공급사"],
+  outbound_orders: ["출고 요청", "출고번호별 고객, 우선순위, 납기, 출고 상태"],
+  outbound_order_lines: ["출고 요청 라인", "출고 요청에 포함된 SKU별 수량 상세"],
+  shipping_pending: ["출고 대기", "피킹/포장 후 출고 확정 대기 중인 건"],
+  stocking_tasks: ["적치 작업", "입고 건을 특정 location에 적치하도록 발행된 작업"],
+  picking_tasks: ["피킹 작업", "출고 주문에 대해 발행된 피킹 작업"],
+  resources: ["작업 리소스", "작업자, 지게차 개별 ID와 활성 상태"],
+  process_time_params: ["공정 시간 파라미터", "입고, 적치, 피킹, 포장/출고 단계별 시간 분포 파라미터"],
+  demand_history: ["수요 이력", "SKU별 과거 출고 수요량"],
+  action_drafts: ["승인 Draft", "승인 대기/승인/거부된 상태변경 후보 작업"],
+  simulation_runs: ["시뮬레이션 실행 이력", "실행 버전, baseline/what-if 유형, 조건, 생성시각"],
+  simulation_kpis: ["시뮬레이션 KPI 원장", "시뮬레이션 실행별 KPI 산출값"],
+  simulation_events: ["시뮬레이션 이벤트", "재고소진, 출고지연, Zone 포화 등 시뮬레이션 중 발생 이벤트"],
+};
+const kpiLabel = (name) => (KPI_META[name] && KPI_META[name].label) || name;
+const kpiDesc = (name) => (KPI_META[name] && KPI_META[name].desc) || "";
 
 function daysFromBase(dateStr) {
   if (!dateStr || !META.base_date) return null;
@@ -32,15 +67,192 @@ function renderKpis(res, comparison, invValue) {
   const sd = kpi(res, "shipping_delay_count"), pw = kpi(res, "picking_wait_minutes"), ut = kpi(res, "resource_utilization_team");
   const so = earliestStockout(res), soDays = so ? daysFromBase(so.p50) : null;
   const cards = [
-    { ico: "🕐", label: "출고지연 (mean)", val: fmtNum(sd.mean, 2), unit: "분", delta: deltaChip(cmpRow(comparison, "shipping_delay_count"), "mean") },
-    { ico: "⏳", label: "피킹처리 P90(분)", val: fmtNum(pw.p90, 1), unit: "분", delta: deltaChip(cmpRow(comparison, "picking_wait_minutes"), "p90") },
-    { ico: "👥", label: "팀 가동률", val: ut.mean != null ? fmtNum(ut.mean * 100, 1) : "—", unit: "%", delta: deltaChip(cmpRow(comparison, "resource_utilization_team"), "mean", false) },
-    { ico: "📅", label: "예상소진일", val: soDays != null ? "D+" + soDays : "—", unit: "", delta: `<span class="kpi-delta flat">${so ? so.p50 : "소진 없음"}</span>` },
+    { ico: "🕐", label: kpiLabel("shipping_delay_count"), val: fmtNum(sd.mean, 2), unit: "건", delta: deltaChip(cmpRow(comparison, "shipping_delay_count"), "mean") },
+    { ico: "⏳", label: kpiLabel("picking_wait_minutes"), val: fmtNum(pw.p90, 1), unit: "분", delta: deltaChip(cmpRow(comparison, "picking_wait_minutes"), "p90") },
+    { ico: "👥", label: kpiLabel("resource_utilization_team"), val: ut.mean != null ? fmtNum(ut.mean * 100, 1) : "—", unit: "%", delta: deltaChip(cmpRow(comparison, "resource_utilization_team"), "mean", false) },
+    { ico: "📅", label: kpiLabel("expected_stockout_date"), val: soDays != null ? "D+" + soDays : "—", unit: "", delta: `<span class="kpi-delta flat">${so ? so.p50 : "소진 없음"}</span>` },
     { ico: "💰", label: "총 재고 비용", val: invValue != null ? "₩" + (invValue / 1e6).toFixed(1) + "M" : "—", unit: "", delta: `<span class="kpi-delta flat">예시 단가 기준</span>` },
   ];
   $("#kpi-row").innerHTML = cards.map((c) => `
     <div class="kpi"><div class="kpi-top"><span class="kpi-ico">${c.ico}</span>${c.label}</div>
       <div class="kpi-val">${c.val}<span class="unit">${c.unit}</span></div>${c.delta}</div>`).join("");
+}
+
+function opKpi(name) { return ((LAST.operationKpis && LAST.operationKpis.kpis) || []).find((x) => x.name === name) || {}; }
+function pct(v, d = 1) { return v == null ? "—" : (Number(v) * 100).toFixed(d) + "%"; }
+function metric(label, value, note = "") {
+  return `<div class="metric"><div class="metric-label">${label}</div><div class="metric-value">${value}</div>${note ? `<div class="metric-note">${note}</div>` : ""}</div>`;
+}
+
+async function loadOperationKpis() {
+  const body = { kpis: ["zone_occupancy", "saturated_zone_count", "safety_stock_below_count", "stocking_completion_rate"] };
+  LAST.operationKpis = await fetch("/kpi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((x) => x.json());
+  renderKpiDashboard();
+  return LAST.operationKpis;
+}
+
+function renderOpsKpis() {
+  const zones = opKpi("zone_occupancy").value || [];
+  const worst = zones.slice().sort((a, b) => Number(b.occupancy || 0) - Number(a.occupancy || 0))[0];
+  const saturated = opKpi("saturated_zone_count");
+  const safety = opKpi("safety_stock_below_count");
+  const stocking = opKpi("stocking_completion_rate");
+  $("#ops-kpi-row").innerHTML = [
+    { ico: "▦", label: kpiLabel("zone_occupancy"), val: worst ? pct(worst.occupancy) : "—", delta: `<span class="kpi-delta flat">${worst ? worst.zone_id : "데이터 없음"}</span>` },
+    { ico: "!", label: kpiLabel("saturated_zone_count"), val: saturated.value ?? "—", unit: "개", delta: `<span class="kpi-delta flat">점유율 90% 초과</span>` },
+    { ico: "↓", label: kpiLabel("safety_stock_below_count"), val: safety.value ?? "—", unit: "개", delta: `<span class="kpi-delta flat">현재 재고 기준</span>` },
+    { ico: "✓", label: kpiLabel("stocking_completion_rate"), val: pct(stocking.value), unit: "", delta: `<span class="kpi-delta flat">STOCKED / 입고 대상</span>` },
+  ].map((c) => `
+    <div class="kpi"><div class="kpi-top"><span class="kpi-ico">${c.ico}</span>${c.label}</div>
+      <div class="kpi-val">${c.val}<span class="unit">${c.unit || ""}</span></div>${c.delta}</div>`).join("");
+
+  if (!zones.length) {
+    $("#zone-kpi-chart").innerHTML = `<div class="kpi-empty">Zone 점유율 데이터 없음</div>`;
+  } else {
+    svgBars($("#zone-kpi-chart"), zones.map((z) => ({
+      label: z.zone_id,
+      bars: [{ name: "점유율", value: Math.round(Number(z.occupancy || 0) * 100), color: Number(z.occupancy || 0) > 0.9 ? "#e1483b" : "#2f6bff" }],
+    })));
+  }
+
+  $("#ops-kpi-table").innerHTML = `
+    <table><thead><tr><th>KPI</th><th>값</th><th>설명</th></tr></thead><tbody>
+      <tr><td>${kpiLabel("zone_occupancy")}</td><td>${zones.map((z) => `${z.zone_id} ${pct(z.occupancy)}`).join("<br>") || "—"}</td><td>${kpiDesc("zone_occupancy")}</td></tr>
+      <tr><td>${kpiLabel("saturated_zone_count")}</td><td class="num">${saturated.value ?? "—"}</td><td>${kpiDesc("saturated_zone_count")}</td></tr>
+      <tr><td>${kpiLabel("safety_stock_below_count")}</td><td class="num">${safety.value ?? "—"}</td><td>${kpiDesc("safety_stock_below_count")}</td></tr>
+      <tr><td>${kpiLabel("stocking_completion_rate")}</td><td class="num">${pct(stocking.value)}</td><td>${kpiDesc("stocking_completion_rate")}</td></tr>
+    </tbody></table>`;
+}
+
+function renderSimKpiDashboard() {
+  const r = LAST.result;
+  if (!r || !r.kpis) {
+    $("#sim-kpi-grid").innerHTML = `<div class="kpi-empty">시뮬레이션 실행 후 표시됩니다.</div>`;
+    $("#sim-kpi-table").innerHTML = `<div class="kpi-empty">시뮬레이션 실행 후 표시됩니다.</div>`;
+    return;
+  }
+  const sd = kpi(r, "shipping_delay_count");
+  const pw = kpi(r, "picking_wait_minutes");
+  const ut = kpi(r, "resource_utilization_team");
+  const zoneRows = (r.kpis || []).filter((x) => x.kpi_name === "zone_max_occupancy");
+  const worstZone = zoneRows.slice().sort((a, b) => Number(b.p90 || b.mean || 0) - Number(a.p90 || a.mean || 0))[0];
+  const so = earliestStockout(r);
+  $("#sim-kpi-grid").innerHTML = [
+    metric(kpiLabel("shipping_delay_count"), fmtNum(sd.mean, 2), `평균 · 지연 발생확률 ${pct(sd.occurrence_prob)}`),
+    metric(kpiLabel("picking_wait_minutes"), fmtNum(pw.p90, 1), "P90 기준"),
+    metric(kpiLabel("resource_utilization_team"), pct(ut.mean), "평균 가동률"),
+    metric(kpiLabel("zone_max_occupancy"), worstZone ? pct(worstZone.p90 ?? worstZone.mean) : "—", worstZone ? `${worstZone.zone_id} · P90 기준` : "Zone 데이터 없음"),
+    metric(kpiLabel("expected_stockout_date"), so ? so.p50 : "소진 없음", so ? `${so.sku} · 발생확률 ${pct(so.occurrence_prob)}` : ""),
+  ].join("");
+
+  const rows = (r.kpis || []).map((x) => {
+    const target = x.zone_id || x.sku || "";
+    const vals = [];
+    if (x.mean != null) vals.push(`mean ${x.unit === "percent" ? pct(x.mean) : fmtNum(x.mean, 2)}`);
+    if (x.p50 != null) vals.push(`p50 ${typeof x.p50 === "number" && x.unit === "percent" ? pct(x.p50) : x.p50}`);
+    if (x.p90 != null) vals.push(`p90 ${typeof x.p90 === "number" && x.unit === "percent" ? pct(x.p90) : x.p90}`);
+    if (x.occurrence_prob != null) vals.push(`prob ${pct(x.occurrence_prob)}`);
+    return `<tr><td>${kpiLabel(x.kpi_name)}<div class="metric-note">${kpiDesc(x.kpi_name)}</div></td><td>${target}</td><td>${vals.join("<br>") || "—"}</td><td>${KPI_META[x.kpi_name]?.unit || x.unit || ""}</td></tr>`;
+  }).join("");
+  $("#sim-kpi-table").innerHTML = `
+    <table><thead><tr><th>KPI</th><th>대상</th><th>값</th><th>단위</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderKpiDashboard() {
+  const sub = $("#kpi-board-sub");
+  if (sub) {
+    const v = LAST.result ? `${LAST.result.version_name} · ${LAST.result.run_type}` : "시뮬레이션 미실행";
+    sub.textContent = `운영 KPI와 최신 시뮬레이션 KPI를 함께 확인합니다. 현재 시뮬레이션: ${v}`;
+  }
+  if (LAST.operationKpis) renderOpsKpis();
+  renderSimKpiDashboard();
+}
+
+function setupDataBrowser() {
+  const sel = $("#data-dataset");
+  if (!sel) return;
+  sel.innerHTML = DATASET_ORDER.map((id) => `<option value="${id}">${DATASET_META[id][0]}</option>`).join("");
+  ["data-dataset", "data-status", "data-sku", "data-zone", "data-date"].forEach((id) => {
+    const el = $("#" + id);
+    if (el) el.addEventListener("change", loadRawData);
+  });
+  const qInput = $("#data-q");
+  if (qInput) qInput.addEventListener("keydown", (e) => { if (e.key === "Enter") loadRawData(); });
+}
+
+function renderSnapshot(s) {
+  if (!s) return;
+  const sim = s.latest_simulation ? `${s.latest_simulation.version_name} · ${s.latest_simulation.run_type}` : "없음";
+  const cards = [
+    ["작업자", `${s.worker}명`, `지게차 ${s.forklift}대 · 가용 팀 ${s.team_count}조`],
+    ["총 재고", fmtNum(s.inventory_units, 0), `재고가치 ₩${(Number(s.inventory_value || 0) / 1e6).toFixed(1)}M`],
+    ["입고 대기", `${s.counts.inbound_waiting}건`, `적치대기 ${s.counts.stocking_waiting}건`],
+    ["출고 작업", `${s.counts.outbound_planned}건`, `출고대기 ${s.counts.shipping_pending}건`],
+    ["위험 지표", `${s.safety_stock_below_count} SKU`, `포화 Zone ${s.saturated_zone_count}개`],
+    ["입고 완료율", pct(s.stocking_completion_rate), "입고 대상 대비 STOCKED 비율"],
+    ["승인 대기", `${s.counts.action_drafts_pending}건`, "상태변경 Draft"],
+    ["상품 마스터", `${s.counts.products}개`, "등록 SKU 수"],
+    ["시뮬레이션", sim, "최신 저장 버전"],
+    ["기준일", s.base_date, "운영 데이터 기준일"],
+  ];
+  $("#snapshot-grid").innerHTML = cards.map(([label, val, note]) => `
+    <div class="snap-card"><div class="snap-label">${safeText(label)}</div>
+      <div class="snap-value">${safeText(val)}</div><div class="snap-note">${safeText(note)}</div></div>`).join("");
+}
+
+async function loadDataSnapshot() {
+  const s = await fetch("/data/snapshot").then((x) => x.json());
+  renderSnapshot(s);
+  return s;
+}
+
+function cellValue(v) {
+  if (v == null) return "";
+  const raw = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return safeText(raw.length > 180 ? raw.slice(0, 180) + "..." : raw);
+}
+
+function renderRawTable(data) {
+  const meta = DATASET_META[data.dataset] || [data.dataset, ""];
+  $("#data-table-title").textContent = meta[0];
+  $("#data-table-meta").textContent = `${meta[1]} · ${data.total}건`;
+  if (!data.rows || !data.rows.length) {
+    $("#raw-data-table").innerHTML = `<div class="raw-empty">조회 결과가 없습니다.</div>`;
+    return;
+  }
+  const cols = Object.keys(data.rows[0]);
+  $("#raw-data-table").innerHTML = `
+    <table><thead><tr>${cols.map((c) => `<th>${safeText(c)}</th>`).join("")}</tr></thead>
+    <tbody>${data.rows.map((row) => `<tr>${cols.map((c) => `<td>${cellValue(row[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+async function loadRawData() {
+  const dataset = $("#data-dataset")?.value || "snapshot";
+  if (dataset === "snapshot") {
+    const s = await loadDataSnapshot();
+    renderRawTable({
+      dataset: "snapshot",
+      total: 1,
+      rows: [{ ...s, counts: JSON.stringify(s.counts), latest_simulation: JSON.stringify(s.latest_simulation) }],
+    });
+    return;
+  }
+  const params = new URLSearchParams({ limit: "200", offset: "0" });
+  const filters = [
+    ["status", $("#data-status")?.value],
+    ["sku", $("#data-sku")?.value],
+    ["zone_id", $("#data-zone")?.value],
+    ["date", $("#data-date")?.value],
+    ["qtext", $("#data-q")?.value],
+  ];
+  filters.forEach(([k, v]) => { if (v) params.set(k, v); });
+  const data = await fetch(`/data/${encodeURIComponent(dataset)}?${params.toString()}`).then((x) => x.json());
+  renderRawTable(data);
+}
+
+async function refreshDataBrowser() {
+  await loadDataSnapshot().catch(() => {});
+  await loadRawData().catch(() => {});
 }
 
 /* ---------- 자체 SVG 차트 ---------- */
@@ -204,6 +416,7 @@ async function runSim() {
     const result = resp.scenario || resp;
     LAST.result = result; LAST.comparison = resp.comparison || null;
     renderKpis(result, LAST.comparison, META.inventory_value);
+    renderKpiDashboard();
     $("#version-badge").textContent = `저장된 버전: ${result.version_name} (${result.run_type})`;
     window.__lastParams = result.params;
     setUpdated();
@@ -224,6 +437,14 @@ async function commitBaseline() {
   const p = window.__lastParams; if (!p) return;
   await fetch("/resources/update?worker=" + p.worker_count + "&forklift=" + p.forklift_count, { method: "POST" }).catch(() => {});
   await loadResources();
+  await loadOperationKpis().catch(() => {});
+}
+
+async function refreshDashboard() {
+  await loadResources();
+  await loadOperationKpis().catch(() => {});
+  await refreshDataBrowser().catch(() => {});
+  await runSim();
 }
 
 function setupTabs() {
@@ -322,14 +543,132 @@ function renderChatStub() {
   $("#chat-list").innerHTML = items.map(([t, m]) => `<div class="chat-item"><div class="ci-title">💬 ${t}</div><div class="ci-meta">${m}</div></div>`).join("");
 }
 
+/* ---------- Agent Chat ---------- */
+const CHAT_SUGGESTS = ["오늘 뭐 해야 돼?", "SKU_A001 언제 소진돼?", "왜 Zone A를 추천했어?", "이번 주 창고 상황 예측해줘"];
+const CHAT_EMPTY_HTML = `<div class="chat-empty" id="chat-empty">
+  <div class="ce-title">무엇을 도와드릴까요?</div>
+  <div class="ce-sub">오늘 할 일, 적치·피킹 추천, 재고 소진 예측, 시뮬레이션을 자연어로 물어보세요.</div>
+</div>`;
+const escapeHtml = (s) => (s == null ? "" : String(s)).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const chatScrollBottom = () => { const el = $("#chat-scroll"); el.scrollTop = el.scrollHeight; };
+const chatThread = () => $("#thread-inner") || $("#chat-scroll");
+
+function appendBubble(role, inner) {
+  const empty = $("#chat-empty"); if (empty) empty.remove();
+  const root = $("#chat-root"); if (root) root.classList.remove("is-empty");
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  wrap.innerHTML = `<div class="bubble">${inner}</div>`;
+  chatThread().appendChild(wrap); chatScrollBottom();
+  return wrap;
+}
+function renderSources(sources) {
+  if (!sources || !sources.length) return "";
+  const items = sources.map((s) => `<span class="src">${escapeHtml(s.source)}${s.section ? " · " + escapeHtml(s.section) : ""}</span>`).join("");
+  return `<div class="msg-src"><span class="src-label">근거</span>${items}</div>`;
+}
+function renderDryRun(dry) {
+  if (!dry || (!(dry.changes || []).length && !(dry.warnings || []).length)) return "";
+  const ch = (dry.changes || []).map((c) => {
+    const tgt = (c.table || "") + (c.field ? "." + c.field : "") + (c.sku ? " (" + c.sku + ")" : "");
+    const val = c.after !== undefined ? c.after : (c.qty_change !== undefined ? c.qty_change : "");
+    const bef = (c.before !== undefined && c.before !== null) ? escapeHtml(c.before) + " → " : "";
+    return `<li>${escapeHtml(tgt)}: ${bef}${escapeHtml(val)}</li>`;
+  }).join("");
+  const wn = (dry.warnings || []).map((w) => `<li class="warn">⚠ ${escapeHtml(w)}</li>`).join("");
+  return `<ul class="dry">${ch}${wn}</ul>`;
+}
+function renderApproval(drafts, toolResults) {
+  if (!drafts || !drafts.length) return "";
+  const d = drafts[0], id = d.draft_id || "";
+  const TYPE = { STK: "적치지시 생성", PCK: "피킹지시 발행", SHP: "출고확정" };
+  const label = TYPE[(id.split("-")[1] || "")] || "상태 변경";
+  const dry = d.dry_run || (toolResults && toolResults.dry_run) || null;
+  return `<div class="approval" data-draft="${escapeHtml(id)}">
+    <div class="ap-head">⚠ 승인이 필요한 작업 — ${label}</div>
+    <div class="ap-id">${escapeHtml(id)}</div>
+    ${renderDryRun(dry)}
+    <div class="ap-actions">
+      <button class="btn-primary ap-yes">승인</button>
+      <button class="btn-ghost ap-no">거부</button>
+    </div></div>`;
+}
+function wireApproval(node, toolResults) {
+  const box = node.querySelector(".approval"); if (!box) return;
+  const id = box.dataset.draft;
+  const done = (txt, cls) => { box.innerHTML = `<div class="ap-done ${cls}">${txt}</div>`; };
+  const call = async (approved) => {
+    box.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      const res = await fetch("/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft_id: id, approved, user_id: "operator01" }) }).then((x) => x.json());
+      if (res.error) { done("처리 오류: " + escapeHtml(res.error), "err"); return; }
+      if (approved) { done("✓ 승인되어 실행되었습니다. (" + escapeHtml(res.status || "EXECUTED") + ")", "ok"); loadResources().catch(() => {}); }
+      else done("✕ 거부되었습니다. (REJECTED 보관)", "no");
+    } catch (e) { done("요청 실패: " + escapeHtml(String(e)), "err"); }
+  };
+  box.querySelector(".ap-yes").addEventListener("click", () => call(true));
+  box.querySelector(".ap-no").addEventListener("click", () => call(false));
+}
+async function sendChat(text) {
+  text = (text || "").trim(); if (!text) return;
+  appendBubble("user", escapeHtml(text));
+  const ta = $("#chat-text"); ta.value = ""; autoGrow(ta);
+  const send = $("#chat-send"); send.disabled = true;
+  const typing = appendBubble("bot", `<span class="typing"><i></i><i></i><i></i></span>`);
+  try {
+    const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: text, user_id: "operator01" }) }).then((x) => x.json());
+    typing.remove();
+    if (r.error) {
+      appendBubble("bot", `<span class="err">오류: ${escapeHtml(r.error)}</span>`);
+    } else {
+      const body = escapeHtml(r.response || "(응답이 비어 있습니다)").replace(/\n/g, "<br>")
+        + renderSources(r.rag_sources)
+        + (r.approval_required ? renderApproval(r.draft_actions, r.tool_results) : "");
+      const node = appendBubble("bot", body);
+      if (r.approval_required) wireApproval(node, r.tool_results);
+    }
+  } catch (e) {
+    typing.remove();
+    appendBubble("bot", `<span class="err">요청 실패: ${escapeHtml(String(e))}</span>`);
+  } finally {
+    send.disabled = false; $("#chat-text").focus(); setUpdated();
+  }
+}
+function autoGrow(ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; }
+function bindSuggests() {
+  const sug = $("#chat-suggest"); if (!sug) return;
+  sug.innerHTML = CHAT_SUGGESTS.map((s) => `<button class="sug">${escapeHtml(s)}</button>`).join("");
+  sug.querySelectorAll(".sug").forEach((b) => b.addEventListener("click", () => sendChat(b.textContent)));
+}
+function resetChat() {
+  const root = $("#chat-root"); if (root) root.classList.add("is-empty");
+  chatThread().innerHTML = CHAT_EMPTY_HTML;
+  bindSuggests();
+  const ta = $("#chat-text");
+  if (ta) { ta.value = ""; autoGrow(ta); ta.focus(); }
+}
+function setupChat() {
+  const ta = $("#chat-text"), send = $("#chat-send"); if (!ta) return;
+  send.addEventListener("click", () => sendChat(ta.value));
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(ta.value); } });
+  ta.addEventListener("input", () => autoGrow(ta));
+  const plus = $("#cp-plus"); if (plus) plus.addEventListener("click", resetChat);
+  bindSuggests();
+}
+
 async function init() {
-  setupTabs(); renderChatStub();
+  setupTabs(); renderChatStub(); setupChat(); setupDataBrowser();
+  const nc = $("#new-chat"); if (nc) nc.addEventListener("click", resetChat);
   $("#run-sim").addEventListener("click", runSim);
-  $("#refresh").addEventListener("click", runSim);
+  $("#refresh").addEventListener("click", refreshDashboard);
+  $("#refresh-kpi").addEventListener("click", () => loadOperationKpis().catch(() => {}));
+  $("#refresh-data").addEventListener("click", refreshDataBrowser);
   $("#commit-baseline").addEventListener("click", commitBaseline);
   $("#tw-play").addEventListener("click", twTogglePlay);
   $("#tw-range").addEventListener("input", (e) => { if (TW.timer) twTogglePlay(); twSetFrame(Number(e.target.value)); });
   await loadResources();
+  await loadOperationKpis().catch(() => {});
+  await refreshDataBrowser().catch(() => {});
   await runSim();
 }
 init();
