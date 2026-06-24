@@ -47,11 +47,11 @@ def build_graph():
 _GRAPH = None
 
 
-def run(query: str, user_id: str | None = None) -> dict:
+def run(query: str, user_id: str | None = None, history: list[dict] | None = None) -> dict:
     global _GRAPH
     if _GRAPH is None:
         _GRAPH = build_graph()
-    return _GRAPH.invoke({"user_query": query, "user_id": user_id})
+    return _GRAPH.invoke({"user_query": query, "user_id": user_id, "history": history or []})
 
 
 if __name__ == "__main__":

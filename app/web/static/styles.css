@@ -28,6 +28,8 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 .chat-list { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
 .chat-item { padding: 10px 12px; border-radius: 10px; cursor: pointer; border: 1px solid transparent; }
 .chat-item:hover { background: #f3f6fb; }
+.chat-item.active { background: #eaf0ff; border-color: #c9d8ff; }
+.ci-empty { color: var(--ink-sub); font-size: 12.5px; padding: 12px 8px; text-align: center; }
 .chat-item .ci-title { font-size: 13.5px; font-weight: 600; }
 .chat-item .ci-meta { font-size: 11px; color: var(--ink-sub); margin-top: 2px; }
 .side-user { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
@@ -143,6 +145,22 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 .toast.fade { animation: toastout .3s ease forwards; }
 @keyframes toastin { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes toastout { to { transform: translateX(20px); opacity: 0; } }
+
+/* Approval 탭 */
+.ap-section-label { font-size: 13px; font-weight: 700; color: var(--ink-sub); margin: 8px 2px 2px; display: flex; align-items: center; gap: 8px; }
+.ap-count { background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; min-width: 20px; text-align: center; padding: 1px 7px; border-radius: 999px; }
+.ap-count.zero { background: var(--ink-sub); }
+.ap-list { display: flex; flex-direction: column; gap: 10px; }
+.ap-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 14px 16px; }
+.ap-card .ap-top { display: flex; align-items: center; gap: 10px; }
+.ap-type { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: #eef4ff; color: var(--accent-ink); }
+.ap-target { font-weight: 700; font-size: 14px; }
+.ap-when { margin-left: auto; font-size: 11.5px; color: var(--ink-sub); }
+.ap-status { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.ap-status.EXECUTED { background: #e9f7ee; color: var(--green); }
+.ap-status.REJECTED { background: #fdeceb; color: var(--red); }
+.ap-status.PENDING_APPROVAL { background: #fff5e6; color: #b97400; }
+.ap-history .ap-card { padding: 10px 14px; opacity: .92; }
 
 /* Placeholder panels */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }

@@ -195,7 +195,21 @@
           </div>
         </div>
       </section>
-      <section class="tab-panel hidden" id="panel-approval"><div class="card placeholder big">Approval — 다음 단계</div></section>
+      <section class="tab-panel hidden" id="panel-approval">
+        <div class="kpi-board">
+          <div class="kpi-board-head">
+            <div>
+              <div class="kpi-board-title">Approval</div>
+              <div class="kpi-board-sub">상태 변경(할당·적치·피킹·출고확정·보충·처분) 승인 대기 작업을 검토·처리합니다.</div>
+            </div>
+            <button class="btn-ghost" id="refresh-approval">새로고침</button>
+          </div>
+          <div class="ap-section-label">승인 대기 <span class="ap-count" id="ap-pending-count">0</span></div>
+          <div class="ap-list" id="ap-pending-list">불러오는 중...</div>
+          <div class="ap-section-label">최근 처리 내역</div>
+          <div class="ap-list ap-history" id="ap-history-list">불러오는 중...</div>
+        </div>
+      </section>
     </main>
   </div>
   <div class="toast-wrap" id="toast-wrap"></div>

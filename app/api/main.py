@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import chat_store
 import realtime
 import resmgmt
 from agent.graph import run as agent_run
@@ -66,6 +67,7 @@ DATASETS = {
 class ChatReq(BaseModel):
     query: str
     user_id: str | None = None
+    session_id: str | None = None
 
 
 class StockingReq(BaseModel):
@@ -202,13 +204,43 @@ def data_rows(dataset: str, limit: int = 100, offset: int = 0, status: str | Non
 
 @app.post("/chat")
 def chat(r: ChatReq):
-    s = agent_run(r.query, r.user_id)
+    # 세션 보장 + 멀티턴 맥락 주입(계층 B) + 영속화(계층 A)
+    session_id = r.session_id or chat_store.create_session(r.user_id)
+    history = chat_store.recent_history(session_id)
+    s = agent_run(r.query, r.user_id, history=history)
+    resp = s.get("final_response")
+    sources = s.get("rag_context", [])
+    chat_store.add_message(session_id, "user", r.query)
+    if resp:
+        chat_store.add_message(session_id, "assistant", resp, intent=s.get("intent"), sources=sources)
     return {"success": s.get("error") is None, "intent": s.get("intent"),
+            "session_id": session_id,
             "approval_required": s.get("approval_required", False),
-            "response": s.get("final_response"),
+            "response": resp,
             "draft_actions": s.get("draft_actions", []),
-            "rag_sources": s.get("rag_context", []),
+            "rag_sources": sources,
             "tool_results": s.get("tool_results", {}), "error": s.get("error")}
+
+
+@app.get("/sessions")
+def sessions_list(user_id: str | None = None):
+    return {"sessions": chat_store.list_sessions(user_id)}
+
+
+@app.post("/sessions")
+def sessions_create(r: ChatReq | None = None):
+    return {"session_id": chat_store.create_session(r.user_id if r else None)}
+
+
+@app.get("/sessions/{session_id}")
+def sessions_get(session_id: str):
+    return {"session_id": session_id, "messages": chat_store.get_messages(session_id)}
+
+
+@app.delete("/sessions/{session_id}")
+def sessions_delete(session_id: str):
+    chat_store.delete_session(session_id)
+    return {"deleted": session_id}
 
 
 @app.get("/inbound")
@@ -341,6 +373,25 @@ def disposal_draft(r: SkuReq):
 @app.post("/shipping/draft")
 def shipping_draft(r: OrderDraftReq):
     return drafts.create_shipping_confirm_draft(r.order_no)
+
+
+@app.get("/drafts")
+def list_drafts(status: str | None = None, limit: int = 60):
+    """승인 Draft 목록(payload·dry-run 파싱 포함) — Approval 탭용."""
+    sql = ("SELECT draft_id, action_type, target_id, payload_json, dry_run_result_json, "
+           "status, created_at, approved_at, executed_at FROM action_drafts")
+    params: tuple = ()
+    if status:
+        marks = ",".join("?" for _ in status.split(","))
+        sql += f" WHERE status IN ({marks})"
+        params = tuple(status.split(","))
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    rows = q(sql, params + (limit,))
+    for r in rows:
+        r["payload"] = json.loads(r.pop("payload_json")) if r.get("payload_json") else {}
+        dr = r.pop("dry_run_result_json")
+        r["dry_run"] = json.loads(dr) if dr else None
+    return {"drafts": rows}
 
 
 @app.post("/approve")

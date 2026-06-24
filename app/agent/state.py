@@ -5,6 +5,7 @@ from typing import TypedDict
 class AgentState(TypedDict, total=False):
     user_query: str
     user_id: str | None
+    history: list[dict]
     intent: str | None
     intent_confidence: float | None
     parameters: dict

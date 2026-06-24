@@ -205,6 +205,26 @@ CREATE TABLE IF NOT EXISTS simulation_events (
     FOREIGN KEY(sim_run_id) REFERENCES simulation_runs(sim_run_id)
 );
 
+-- 대화 세션(Chat UI 이력 저장·복원 + 멀티턴 맥락)
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT,
+    title TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    msg_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,                -- user | assistant
+    content TEXT NOT NULL,
+    intent TEXT,
+    sources_json TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id)
+);
+
 -- 로그
 CREATE TABLE IF NOT EXISTS tool_logs (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,

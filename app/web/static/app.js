@@ -2,6 +2,7 @@
 const $ = (s) => document.querySelector(s);
 let META = { base_date: null };
 let LAST = { result: null, forecast: null, comparison: null, insightTab: "inv", operationKpis: null };
+let CHAT = { sessionId: null, sessions: [], filter: "" };
 
 const kpi = (res, name) => (res.kpis || []).find((k) => k.kpi_name === name) || {};
 const fmtNum = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
@@ -525,6 +526,7 @@ function setupTabs() {
     t.classList.add("active");
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     $("#panel-" + t.dataset.tab).classList.remove("hidden");
+    if (t.dataset.tab === "approval") loadApproval().catch(() => {});
   }));
   document.querySelectorAll("#insight-tabs .seg-btn").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("#insight-tabs .seg-btn").forEach((x) => x.classList.remove("active"));
@@ -612,10 +614,47 @@ function renderTimeline(events) {
   }).join("");
 }
 
-function renderChatStub() {
-  const items = [["재고 소진 예측", "오늘 10:12"], ["작업자 증원 시나리오", "오늘 09:48"], ["Zone B 병목 분석", "어제 16:32"],
-    ["출고지연 원인", "어제 14:05"], ["피킹 효율 개선 방안", "어제 11:20"], ["시뮬레이션 비교 분석", "05-20 17:22"]];
-  $("#chat-list").innerHTML = items.map(([t, m]) => `<div class="chat-item"><div class="ci-title">💬 ${t}</div><div class="ci-meta">${m}</div></div>`).join("");
+async function loadSessions() {
+  try {
+    const r = await fetch("/sessions?user_id=operator01").then((x) => x.json());
+    CHAT.sessions = r.sessions || [];
+  } catch (_) { CHAT.sessions = []; }
+  renderSessions();
+}
+function renderSessions() {
+  const list = $("#chat-list"); if (!list) return;
+  const f = CHAT.filter.trim().toLowerCase();
+  const items = CHAT.sessions.filter((s) => !f || (s.title || "").toLowerCase().includes(f));
+  if (!items.length) {
+    list.innerHTML = `<div class="ci-empty">${f ? "검색 결과 없음" : "대화 이력이 없습니다"}</div>`;
+    return;
+  }
+  list.innerHTML = items.map((s) => {
+    const when = (s.updated_at || "").replace("T", " ").slice(5, 16);
+    const active = s.session_id === CHAT.sessionId ? " active" : "";
+    return `<div class="chat-item${active}" data-sid="${safeText(s.session_id)}">
+      <div class="ci-title">💬 ${safeText(s.title || "새 대화")}</div>
+      <div class="ci-meta">${safeText(when)} · ${s.msg_count || 0}메시지</div></div>`;
+  }).join("");
+  list.querySelectorAll(".chat-item").forEach((el) =>
+    el.addEventListener("click", () => openSession(el.dataset.sid)));
+}
+async function openSession(sid) {
+  if (!sid) return;
+  CHAT.sessionId = sid;
+  const r = await fetch(`/sessions/${sid}`).then((x) => x.json()).catch(() => null);
+  const msgs = (r && r.messages) || [];
+  chatThread().innerHTML = "";
+  const root = $("#chat-root"); if (root) root.classList.remove("is-empty");
+  msgs.forEach((m) => {
+    if (m.role === "user") appendBubble("user", escapeHtml(m.content));
+    else {
+      let sources = []; try { sources = JSON.parse(m.sources_json || "[]"); } catch (_) {}
+      appendBubble("bot", escapeHtml(m.content).replace(/\n/g, "<br>") + renderSources(sources));
+    }
+  });
+  if (!msgs.length) chatThread().innerHTML = CHAT_EMPTY_HTML;
+  renderSessions();
 }
 
 /* ---------- Agent Chat ---------- */
@@ -668,10 +707,14 @@ function renderApproval(drafts, toolResults) {
       <button class="btn-ghost ap-no">거부</button>
     </div></div>`;
 }
-function wireApproval(node, toolResults) {
-  const box = node.querySelector(".approval"); if (!box) return;
+function wireApproval(node, toolResults, onDone) {
+  const box = node.classList && node.classList.contains("approval") ? node : node.querySelector(".approval");
+  if (!box) return;
   const id = box.dataset.draft;
-  const done = (txt, cls) => { box.innerHTML = `<div class="ap-done ${cls}">${txt}</div>`; };
+  const done = (txt, cls) => {
+    box.innerHTML = `<div class="ap-done ${cls}">${txt}</div>`;
+    if (onDone) setTimeout(onDone, 700);
+  };
   const call = async (approved) => {
     box.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
@@ -684,6 +727,43 @@ function wireApproval(node, toolResults) {
   box.querySelector(".ap-yes").addEventListener("click", () => call(true));
   box.querySelector(".ap-no").addEventListener("click", () => call(false));
 }
+// ---------- Approval 탭 ----------
+const ACTION_LABEL = { ALLOCATION: "할당", STOCKING: "적치지시", PICKING: "피킹지시",
+  SHIPPING: "출고확정", REPLENISH: "재고보충", DISPOSAL: "처분" };
+
+function apDrawCard(d, pending) {
+  const label = ACTION_LABEL[d.action_type] || d.action_type;
+  const when = (d.executed_at || d.approved_at || d.created_at || "").replace("T", " ").slice(5, 16);
+  const head = `<div class="ap-top"><span class="ap-type">${safeText(label)}</span>
+    <span class="ap-target">${safeText(d.target_id || "")}</span>
+    ${pending ? "" : `<span class="ap-status ${d.status}">${safeText(d.status)}</span>`}
+    <span class="ap-when">${safeText(when)}</span></div>`;
+  if (pending) {
+    return `<div class="ap-card approval" data-draft="${safeText(d.draft_id)}">${head}
+      ${renderDryRun(d.dry_run)}
+      <div class="ap-actions"><button class="btn-primary ap-yes">승인</button>
+        <button class="btn-ghost ap-no">거부</button></div></div>`;
+  }
+  return `<div class="ap-card">${head}${renderDryRun(d.dry_run)}</div>`;
+}
+
+async function loadApproval() {
+  const [pend, hist] = await Promise.all([
+    fetch("/drafts?status=PENDING_APPROVAL").then((x) => x.json()),
+    fetch("/drafts?status=EXECUTED,REJECTED&limit=20").then((x) => x.json()),
+  ]);
+  const pending = pend.drafts || [], history = hist.drafts || [];
+  const cnt = $("#ap-pending-count"); cnt.textContent = pending.length;
+  cnt.classList.toggle("zero", pending.length === 0);
+  $("#ap-pending-list").innerHTML = pending.length
+    ? pending.map((d) => apDrawCard(d, true)).join("")
+    : `<div class="kpi-empty">승인 대기 작업이 없습니다.</div>`;
+  $("#ap-pending-list").querySelectorAll(".approval").forEach((node) => wireApproval(node, null, loadApproval));
+  $("#ap-history-list").innerHTML = history.length
+    ? history.map((d) => apDrawCard(d, false)).join("")
+    : `<div class="kpi-empty">처리 내역이 없습니다.</div>`;
+}
+
 async function sendChat(text) {
   text = (text || "").trim(); if (!text) return;
   appendBubble("user", escapeHtml(text));
@@ -691,8 +771,9 @@ async function sendChat(text) {
   const send = $("#chat-send"); send.disabled = true;
   const typing = appendBubble("bot", `<span class="typing"><i></i><i></i><i></i></span>`);
   try {
-    const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: text, user_id: "operator01" }) }).then((x) => x.json());
+    const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: text, user_id: "operator01", session_id: CHAT.sessionId }) }).then((x) => x.json());
     typing.remove();
+    if (r.session_id) CHAT.sessionId = r.session_id;
     if (r.error) {
       appendBubble("bot", `<span class="err">오류: ${escapeHtml(r.error)}</span>`);
     } else {
@@ -707,6 +788,7 @@ async function sendChat(text) {
     appendBubble("bot", `<span class="err">요청 실패: ${escapeHtml(String(e))}</span>`);
   } finally {
     send.disabled = false; $("#chat-text").focus(); setUpdated();
+    loadSessions().catch(() => {});   // 사이드바 이력 갱신(새 세션·제목·시각)
   }
 }
 function autoGrow(ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; }
@@ -716,11 +798,13 @@ function bindSuggests() {
   sug.querySelectorAll(".sug").forEach((b) => b.addEventListener("click", () => sendChat(b.textContent)));
 }
 function resetChat() {
+  CHAT.sessionId = null;                 // 새 대화 = 새 세션
   const root = $("#chat-root"); if (root) root.classList.add("is-empty");
   chatThread().innerHTML = CHAT_EMPTY_HTML;
   bindSuggests();
   const ta = $("#chat-text");
   if (ta) { ta.value = ""; autoGrow(ta); ta.focus(); }
+  renderSessions();
 }
 function setupChat() {
   const ta = $("#chat-text"), send = $("#chat-send"); if (!ta) return;
@@ -763,12 +847,16 @@ function setupRealtime() {
 }
 
 async function init() {
-  setupTabs(); renderChatStub(); setupChat(); setupDataBrowser(); setupRealtime();
+  setupTabs(); setupChat(); setupDataBrowser(); setupRealtime();
+  loadSessions().catch(() => {});
+  const ss = document.querySelector(".side-search");
+  if (ss) ss.addEventListener("input", (e) => { CHAT.filter = e.target.value; renderSessions(); });
   const nc = $("#new-chat"); if (nc) nc.addEventListener("click", resetChat);
   $("#run-sim").addEventListener("click", runSim);
   $("#refresh").addEventListener("click", refreshDashboard);
   $("#refresh-kpi").addEventListener("click", () => loadOperationKpis().catch(() => {}));
   $("#refresh-data").addEventListener("click", refreshDataBrowser);
+  const ra = $("#refresh-approval"); if (ra) ra.addEventListener("click", () => loadApproval().catch(() => {}));
   $("#commit-baseline").addEventListener("click", commitBaseline);
   $("#tw-play").addEventListener("click", twTogglePlay);
   $("#tw-range").addEventListener("input", (e) => { if (TW.timer) twTogglePlay(); twSetFrame(Number(e.target.value)); });

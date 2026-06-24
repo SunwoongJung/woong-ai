@@ -62,10 +62,18 @@ def router_node(state: dict) -> dict:
         "- out_of_scope: WMS 운영과 무관한 질문(날씨·일반상식 등)\n"
         "규칙: 질의에 '왜', '이유', '어떻게 계산'이 있으면 policy_question 을 우선한다. "
         "단순 인사·감사는 greeting(업무 목록을 나열하지 말 것).\n"
+        "이전 대화가 제공되면 대명사·생략(그 주문, 거기, 그거 등)을 직전 맥락으로 해소해 "
+        "parameters(order_no·sku 등)를 채운다.\n"
         "parameters 키(있을 때만): sku, inbound_no, order_no, location_id, zone_id, target_date, kpis, scenario, scope.\n"
         '형식: {"intent":..,"confidence":0~1,"parameters":{..}}'
     )
-    j = _json_chat(system, state["user_query"], settings.openai_router_model)
+    hist = state.get("history") or []
+    prefix = ""
+    if hist:
+        lines = "\n".join(f"{'사용자' if h['role'] == 'user' else '조수'}: {str(h['content'])[:200]}"
+                          for h in hist[-6:])
+        prefix = f"[이전 대화]\n{lines}\n\n[현재 질문]\n"
+    j = _json_chat(system, prefix + state["user_query"], settings.openai_router_model)
     return {"intent": j.get("intent"), "intent_confidence": j.get("confidence"),
             "parameters": j.get("parameters", {}) or {}}
 
@@ -239,7 +247,8 @@ _PERSONA = (
     "원칙: 결론을 먼저, 그 다음 수치→근거/산식→권장조치 순. 모든 수치는 제공된 Tool 결과를 그대로 인용하고 "
     "임의 생성하지 않습니다('약','아마' 금지). HIGH 위험·출고임박은 첫머리에. 이모지·과장 금지.\n"
     "상태변경(적치/피킹지시·출고확정)은 반드시 '승인이 필요합니다'를 명시합니다.\n"
-    "RAG 근거가 부족(abstain)하면 정책을 지어내지 말고 '문서 근거가 부족합니다'라고 답합니다."
+    "RAG 근거가 부족(abstain)하면 정책을 지어내지 말고 '문서 근거가 부족합니다'라고 답합니다.\n"
+    "recent_dialogue가 있으면 직전 맥락과 자연스럽게 이어지도록 답합니다(반복 인사·재설명 금지)."
 )
 
 
@@ -254,7 +263,8 @@ def response_generator_node(state: dict) -> dict:
         return {"final_response": state.get("_rag_abstain_msg") or "문서 근거가 부족합니다."}
     tr = state.get("tool_results", {}) or {}
     context = {"intent": state.get("intent"), "tool_results": tr,
-               "rag_evidence": state.get("rag_context", [])}
+               "rag_evidence": state.get("rag_context", []),
+               "recent_dialogue": (state.get("history") or [])[-6:]}
     scope = tr.get("_scope")
     scope_note = ""
     if state.get("intent") == "daily_summary" and scope and scope != "all":
