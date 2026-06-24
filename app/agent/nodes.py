@@ -238,6 +238,7 @@ def rag_retriever_node(state: dict) -> dict:
     r = retriever.retrieve(state["user_query"], intent=state.get("intent"))
     return {"rag_context": r["evidence"], "rag_context_sufficient": r["answerable"],
             "rag_retry_count": r["retries"],
+            "_rag_sufficiency": r.get("sufficiency"),
             "_rag_abstain": r["abstain"], "_rag_abstain_msg": r.get("abstain_message")}
 
 

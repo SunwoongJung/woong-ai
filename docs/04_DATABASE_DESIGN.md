@@ -327,3 +327,24 @@ CREATE INDEX idx_sim_events_run ON simulation_events(sim_run_id);
 추천 → Draft 생성 → 사용자 승인 → 실제 상태변경
 ```
 승인 없이 변경되면 안 되는 테이블: picking_tasks, stocking_tasks, shipping_pending, outbound_orders.status, inbound_orders.status, inventory.qty
+
+## 7. 구현 반영 DDL (2026-06-25)
+
+### 7.1 출고 라인 수량 세분화 (할당 단계)
+`outbound_order_lines`에 컬럼 추가:
+- `allocated_qty` / `picked_qty` / `shipped_qty` INTEGER DEFAULT 0
+- `line_status` TEXT DEFAULT 'PLANNED' (PLANNED→ALLOCATED/PARTIAL→PICKED→SHIPPED)
+
+`outbound_orders.status`에 `ALLOCATED` 추가 — PLANNED/ALLOCATED = 할당·피킹 대상.
+
+### 7.2 2단 재고 (보충)
+`locations.location_role` TEXT DEFAULT 'PICK' — PICK(피킹면 전진재고)/RESERVE(보관 벌크). 보충은 RESERVE→PICK 이동.
+
+### 7.3 대화 세션 (Chat UI 메모리)
+- `chat_sessions(session_id, user_id, title, created_at, updated_at)`
+- `chat_messages(msg_id, session_id, role, content, intent, sources_json, created_at)`
+
+### 7.4 실행 트레이스 (AI 관측)
+`agent_traces(run_id, session_id, query, intent, confidence, rag_required, answerable, sufficiency, retries, abstain, approval_required, steps_json, final_response, created_at)`
+
+> 기존 DB는 `ensure_allocation_columns`/`ensure_location_role_column`/`ensure_chat_tables`/`ensure_trace_table`로 무중단 자동 마이그레이션(ALTER/CREATE IF NOT EXISTS).

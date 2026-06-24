@@ -100,3 +100,11 @@ DES 1개 instance를 실제 창고처럼 모사하고 결과를 시각화한다(
 5. KPI Dashboard
 6. Tool Trace
 7. Inventory Risk 상세
+
+## 10. 구현 반영 화면 (2026-06-25)
+- 탭 구성: Agent Chat · KPI Dashboard · 운영 데이터 · Warehouse Simulation · Approval · **AI 관측**.
+- Agent Chat: 좌측 사이드바 **세션 목록**(검색·복원·새 대화), 멀티턴 맥락.
+- KPI Dashboard: **예상 결품·체화재고·보충 필요** KPI 카드 추가(반응형 auto-fit).
+- Approval 탭(구현): 모든 상태변경 승인대기 + 처리내역, dry-run 경고, 승인/거부.
+- AI 관측 탭(§8 Trace 확장): 실행 목록 + **노드 흐름 타임라인**(Router→…→RAG(PRISM·충분성)→Response→Approval).
+- 실시간 수요: 헤더 토글 + 우하단 **Toast**(입고/출고).

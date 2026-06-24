@@ -317,3 +317,22 @@ Draft의 상태변경 결과를 실제 반영 없이 미리 계산한다.
 | Forecast 데이터 7~29일 | 이동평균 fallback (7일/14일) |
 | 승인 없음 | Draft 상태 유지 |
 | Dry Run 경고 존재 | 경고 표시 후 사용자 판단 위임 |
+
+## 11. 구현 반영 Tool (2026-06-25)
+실 WMS 흐름 반영으로 신규 Tool·Draft 액션 추가.
+
+### 11.1 할당(allocation.py)
+- `calculate_allocation(order_no)`: on-hand 기준 라인별 할당가능/결품.
+- `scan_allocation(target_date, within_days=0)`: ATP(현재고+입고예정) 기준 근미래 납기 주문 할당 시뮬레이션 → 예상 결품.
+- `apply_allocation`: 라인 allocated_qty/line_status, 주문 status=ALLOCATED.
+
+### 11.2 체화재고(dead_stock.py)
+- `scan_dead_stock(grades)`: EXPIRING(유통기한 임박/만료)/DEAD(최근14일 무출고)/SLOW(저회전) 등급화 + 재고가치.
+
+### 11.3 보충(replenishment.py)
+- `scan_replenishment()`: 피킹면 < 목표(수요×2일, 최소 안전재고) & 보관 보유 → 보충 추천(긴급도순).
+- `execute_replenishment(...)`: RESERVE→PICK 재고 이동.
+
+### 11.4 Draft 액션 확장
+기존 STOCKING/PICKING/SHIPPING에 **ALLOCATION / REPLENISH / DISPOSAL** 추가. 모두 dry-run + 승인 후 실행.
+DISPOSAL은 해당 SKU의 AVAILABLE 재고를 HOLD로 전환(출고 풀 제외).

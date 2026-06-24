@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import chat_store
 import realtime
 import resmgmt
+import trace_store
 from agent.graph import run as agent_run
 from config import settings
 from sim import des, forecast, versions, whatif
@@ -210,11 +211,12 @@ def chat(r: ChatReq):
     s = agent_run(r.query, r.user_id, history=history)
     resp = s.get("final_response")
     sources = s.get("rag_context", [])
+    run_id = trace_store.save(s, session_id=session_id, query=r.query)  # 동작 검증용 트레이스
     chat_store.add_message(session_id, "user", r.query)
     if resp:
         chat_store.add_message(session_id, "assistant", resp, intent=s.get("intent"), sources=sources)
     return {"success": s.get("error") is None, "intent": s.get("intent"),
-            "session_id": session_id,
+            "session_id": session_id, "run_id": run_id,
             "approval_required": s.get("approval_required", False),
             "response": resp,
             "draft_actions": s.get("draft_actions", []),
@@ -433,6 +435,20 @@ def realtime_status():
 async def realtime_emit():
     """수동으로 실시간 요청 1건 발생(데모용)."""
     return await realtime.emit_once()
+
+
+@app.get("/traces")
+def traces_list(limit: int = 40):
+    """에이전트 실행 트레이스 목록(최신순) — AI 동작 검증 화면."""
+    return {"traces": trace_store.list_traces(limit)}
+
+
+@app.get("/traces/{run_id}")
+def trace_detail(run_id: str):
+    t = trace_store.get_trace(run_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="트레이스 없음")
+    return t
 
 
 @app.get("/trace/{run_id}")

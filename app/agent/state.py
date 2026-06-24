@@ -17,6 +17,9 @@ class AgentState(TypedDict, total=False):
     rag_context: list[dict]
     rag_context_sufficient: bool | None
     rag_retry_count: int
+    _rag_sufficiency: dict
+    _rag_abstain: bool
+    _rag_abstain_msg: str | None
     draft_actions: list[dict]
     approval_required: bool
     final_response: str | None

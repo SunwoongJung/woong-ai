@@ -527,6 +527,7 @@ function setupTabs() {
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     $("#panel-" + t.dataset.tab).classList.remove("hidden");
     if (t.dataset.tab === "approval") loadApproval().catch(() => {});
+    if (t.dataset.tab === "trace") loadTraces().catch(() => {});
   }));
   document.querySelectorAll("#insight-tabs .seg-btn").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("#insight-tabs .seg-btn").forEach((x) => x.classList.remove("active"));
@@ -764,6 +765,69 @@ async function loadApproval() {
     : `<div class="kpi-empty">처리 내역이 없습니다.</div>`;
 }
 
+// ---------- AI 관측(trace) 탭 ----------
+let TRACE = { runId: null, items: [] };
+
+async function loadTraces() {
+  try { TRACE.items = (await fetch("/traces?limit=40").then((x) => x.json())).traces || []; }
+  catch (_) { TRACE.items = []; }
+  renderTraceList();
+  if (TRACE.items.length && !TRACE.runId) openTrace(TRACE.items[0].run_id);
+}
+function renderTraceList() {
+  const el = $("#trace-list"); if (!el) return;
+  if (!TRACE.items.length) { el.innerHTML = `<div class="kpi-empty">실행 이력이 없습니다. Agent Chat에서 질문해 보세요.</div>`; return; }
+  el.innerHTML = TRACE.items.map((t) => {
+    const when = (t.created_at || "").replace("T", " ").slice(5, 16);
+    const flags = (t.rag_required ? `<span class="tr-flag rag">RAG</span>` : "")
+      + (t.abstain ? `<span class="tr-flag abst">abstain</span>` : "")
+      + (t.approval_required ? `<span class="tr-flag appr">승인</span>` : "");
+    return `<div class="tr-item${t.run_id === TRACE.runId ? " active" : ""}" data-run="${safeText(t.run_id)}">
+      <div class="tr-q">${safeText((t.query || "").slice(0, 60))}</div>
+      <div class="tr-meta"><span class="tr-intent">${safeText(t.intent || "-")}</span>${flags}
+        <span class="tr-time">${safeText(when)}</span></div></div>`;
+  }).join("");
+  el.querySelectorAll(".tr-item").forEach((n) => n.addEventListener("click", () => openTrace(n.dataset.run)));
+}
+function kv(k, v) { return `<span class="fs-kv"><b>${k}</b> ${safeText(v)}</span>`; }
+function renderStepBody(s) {
+  const o = s.out || {};
+  if (s.node === "Router") return kv("intent", o.intent) + kv("confidence", o.confidence != null ? Number(o.confidence).toFixed(2) : "—")
+    + (Object.keys(o.parameters || {}).length ? `<div>${Object.entries(o.parameters).map(([k, v]) => `<span class="fs-chip">${safeText(k)}=${safeText(v)}</span>`).join("")}</div>` : "");
+  if (s.node === "Param Extractor") return (o.missing_parameters || []).length ? kv("누락", (o.missing_parameters).join(", ")) : `<span class="fs-chip">필수값 충족</span>`;
+  if (s.node === "Planner") return (o.plan || []).map((p) => `<span class="fs-chip">${safeText(p)}</span>`).join("") || "—";
+  if (s.node === "Tool Executor") return (o.tools || []).length ? (o.tools).map((t) => `<span class="fs-chip">${safeText(t)}</span>`).join("") : `<span class="fs-chip">도구 없음</span>` + (o.error ? kv("error", o.error) : "");
+  if (s.node === "Verifier") { const v = o.verification_results || {}; return Object.keys(v).length ? Object.entries(v).map(([k, val]) => kv(k, val)).join("") : `<span class="fs-chip">해당 없음</span>`; }
+  if (s.node === "RAG Decision") return `<span class="fs-chip">${o.rag_required ? "검색 수행" : "검색 불필요"}</span>`;
+  if (s.node === "RAG Retriever") {
+    const ev = (o.evidence || []).map((e) => {
+      const rel = Number(e.relevance || 0);
+      return `<div class="ev-row"><div><div class="ev-src">${safeText(e.source)}${e.section ? " · " + safeText(e.section) : ""}</div>
+        <div class="ev-span">${safeText(e.evidence_span || "")}</div></div>
+        <div class="ev-score">rel ${rel.toFixed(2)} · con ${Number(e.contribution || 0).toFixed(2)}<span class="ev-bar" style="width:${Math.round(rel * 40)}px"></span></div></div>`;
+    }).join("");
+    return kv("answerable", o.answerable) + kv("충분성", o.sufficiency_score != null ? Number(o.sufficiency_score).toFixed(2) : "—")
+      + kv("재검색", o.retries) + (o.abstain ? `<span class="tr-flag abst">abstain</span>` : "")
+      + (o.missing_evidence_types || []).map((m) => `<span class="fs-chip">missing: ${safeText(m)}</span>`).join("")
+      + (ev ? `<div style="margin-top:8px">${ev}</div>` : "");
+  }
+  if (s.node === "Response Generator") return `<div class="fs-resp">${safeText((o.final_response || "").slice(0, 280))}${(o.final_response || "").length > 280 ? "…" : ""}</div>`;
+  if (s.node === "Approval Gate") return o.approval_required ? `<span class="tr-flag appr">승인 필요</span> ${(o.draft_actions || []).map((d) => `<span class="fs-chip">${safeText(d.draft_id || "")}</span>`).join("")}` : `<span class="fs-chip">승인 불필요</span>`;
+  return "";
+}
+async function openTrace(runId) {
+  TRACE.runId = runId; renderTraceList();
+  const t = await fetch(`/traces/${runId}`).then((x) => x.json()).catch(() => null);
+  const el = $("#trace-detail"); if (!el) return;
+  if (!t || !t.steps) { el.innerHTML = `<div class="kpi-empty">트레이스를 불러올 수 없습니다.</div>`; return; }
+  const flow = t.steps.map((s) =>
+    `<div class="fstep"><div><span class="fs-node">${safeText(s.node)}</span><span class="fs-label">${safeText(s.label || "")}</span></div>
+      <div class="fs-body">${renderStepBody(s)}</div></div>`).join("");
+  el.innerHTML = `<div class="td-q">${safeText(t.query || "")}</div>
+    <div class="td-sub">run ${safeText(t.run_id)} · ${safeText((t.created_at || "").replace("T", " ").slice(0, 16))}</div>
+    <div class="flow">${flow}</div>`;
+}
+
 async function sendChat(text) {
   text = (text || "").trim(); if (!text) return;
   appendBubble("user", escapeHtml(text));
@@ -857,6 +921,7 @@ async function init() {
   $("#refresh-kpi").addEventListener("click", () => loadOperationKpis().catch(() => {}));
   $("#refresh-data").addEventListener("click", refreshDataBrowser);
   const ra = $("#refresh-approval"); if (ra) ra.addEventListener("click", () => loadApproval().catch(() => {}));
+  const rt = $("#refresh-trace"); if (rt) rt.addEventListener("click", () => { TRACE.runId = null; loadTraces().catch(() => {}); });
   $("#commit-baseline").addEventListener("click", commitBaseline);
   $("#tw-play").addEventListener("click", twTogglePlay);
   $("#tw-range").addEventListener("input", (e) => { if (TW.timer) twTogglePlay(); twSetFrame(Number(e.target.value)); });

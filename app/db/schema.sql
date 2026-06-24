@@ -225,6 +225,24 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id)
 );
 
+-- 에이전트 실행 트레이스(LangGraph 노드 흐름 + RAG 과정 관측)
+CREATE TABLE IF NOT EXISTS agent_traces (
+    run_id TEXT PRIMARY KEY,
+    session_id TEXT,
+    query TEXT,
+    intent TEXT,
+    confidence REAL,
+    rag_required INTEGER,
+    answerable INTEGER,
+    sufficiency REAL,
+    retries INTEGER,
+    abstain INTEGER,
+    approval_required INTEGER,
+    steps_json TEXT,
+    final_response TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 로그
 CREATE TABLE IF NOT EXISTS tool_logs (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -125,3 +125,11 @@ seed/shipping_pending.csv
 seed/resources.csv
 seed/process_time_params.csv
 ```
+
+## 10. 구현 반영 시드 (2026-06-25)
+- 필수 SKU 추가:
+  - `SKU_A006` — 전 기간 무출고(체화 DEAD 시연), L-I-001에 90.
+  - `SKU_A007` — 피킹면 부족·보관 보유(보충 시연), L-D-001(PICK) 8 / L-D-003(RESERVE) 100.
+- 결품 시연: `ORD005` = SKU_A001 300 요청(가용 120) → 할당 부족 180.
+- 로케이션 역할: 존마다 첫 로케이션(L-x-001)=PICK, 나머지=RESERVE.
+- 출고 라인: 과거 SHIPPED는 line_status=SHIPPED·전량 수량, 현재 PLANNED는 0/PLANNED.

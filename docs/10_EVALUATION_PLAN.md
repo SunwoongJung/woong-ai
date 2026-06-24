@@ -93,3 +93,9 @@ DES(확률적 KPI, 07_FORECAST_AND_SIMULATION.md):
   "fix":"metadata filter 강화"
 }
 ```
+
+## 10. 구현 반영 하네스 (2026-06-25)
+하네스 체크 24→40개로 확장(100% 통과). 추가 항목:
+- **할당/결품**: ORD005 결품 발생 · scan에 포함 · 할당량 ≤ 요청량.
+- **체화재고/보충**: SKU_A006 = DEAD 식별 · SKU_A007 보충 추천 · 보충량 ≤ 보관재고.
+- **Intent**: allocation_query / dead_stock_query / replenishment_query 분류 추가.

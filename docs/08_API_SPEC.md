@@ -117,3 +117,25 @@ Draft 승인 및 실행.
 
 ## 14. GET /trace/{run_id}
 Agent 실행 trace 조회.
+
+## 15. 구현 반영 엔드포인트 (2026-06-25)
+
+### 출고 할당
+- `GET /allocation/scan?target_date=` — 예상 결품(ATP 기준)
+- `POST /allocation/draft {order_no}`
+
+### 체화재고 / 보충
+- `GET /deadstock/scan?grades=`
+- `GET /replenishment/scan`
+- `POST /replenishment/draft {sku}` · `POST /disposal/draft {sku}`
+
+### 승인
+- `GET /drafts?status=PENDING_APPROVAL,...` — payload·dry-run 파싱 포함
+
+### 대화 세션
+- `POST /chat` — 요청에 `session_id` 추가, 응답에 `session_id`·`run_id` 추가, 최근 6턴 맥락 주입
+- `GET /sessions?user_id=` · `POST /sessions` · `GET /sessions/{id}` · `DELETE /sessions/{id}`
+
+### 실시간 수요 / 관측
+- `GET /events` (SSE) · `POST /realtime/start|stop|emit` · `GET /realtime/status`
+- `GET /traces?limit=` · `GET /traces/{run_id}` — 노드 흐름·RAG 과정

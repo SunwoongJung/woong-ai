@@ -245,3 +245,22 @@ class SessionState(TypedDict):
 - 저장 전 필터링: 개인정보, 일회성 지시, 잘못된 추론은 제외.
 - **장기 메모리는 답변 근거(RAG)가 아니라 개인화·업무 편의용으로만 사용**한다(근거는 RAG, 문맥은 세션, 개인화는 장기 메모리로 역할 분리).
 - 단순 로그 적재가 아닌 유사 항목 통합(consolidation)이 핵심.
+
+## 11. 구현 반영 (2026-06-25)
+
+### 11.1 Intent 확장 (실 WMS 흐름)
+실 WMS(BGF로지스) 메뉴를 참조해 출고 할당·체화재고·보충 인텐트를 추가했다.
+- 조회: `allocation_query`(할당현황·예상 결품), `dead_stock_query`(체화재고), `replenishment_query`(피킹면 보충)
+- 상태변경(승인 필요): `allocation_create`, `disposal_create`, `replenish_create`
+- STATE_CHANGE_INTENTS / REQUIRED_PARAMS / ToolExecutor 핸들러에 반영.
+
+### 11.2 멀티턴 맥락 (§10 단기 메모리 구현)
+- AgentState에 `history`(최근 6턴) 추가, `run(query, user_id, history)`로 주입.
+- Router: 이전 대화로 대명사·생략 해소("그거 할당해줘" → 직전 order_no).
+- Response Generator: `recent_dialogue`를 컨텍스트에 포함해 연속성 유지.
+- 영속화는 서버 DB(chat_sessions/chat_messages, 04 §7 참고). 장기 메모리(§10)는 설계만 유지.
+
+### 11.3 실행 트레이스(관측)
+- 매 `/chat` 실행의 최종 상태에서 노드 경로를 재구성해 `agent_traces`에 저장(trace_store).
+- LangGraph 미선언 채널 드롭 방지를 위해 `_rag_sufficiency/_rag_abstain/_rag_abstain_msg`를 State에 선언.
+- AI 동작 검증 화면(09 §10)이 조회: Router→ParamExtractor→…→RAG(PRISM·충분성)→Response→Approval.
