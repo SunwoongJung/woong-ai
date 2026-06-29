@@ -70,6 +70,13 @@ def action_get(action_id: str):
     return actions.get(action_id) or {"error": "not found"}
 
 
+@router.get("/blackboard/actions/{action_id}/explanation")
+def action_explanation(action_id: str, regenerate: bool = False, use_llm: bool = True):
+    """운영자용 한국어 설명(LLM, 폴백 템플릿). 최초 생성 후 캐시."""
+    from bb import explanation
+    return explanation.explain(action_id, regenerate=regenerate, use_llm=use_llm)
+
+
 # ---------- Audit ----------
 @router.get("/blackboard/audit-logs")
 def audit_list(action_id: str | None = None, event_id: str | None = None,

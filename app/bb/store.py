@@ -34,6 +34,7 @@ def ensure_schema() -> None:
         _add_cols(conn, "resources", {"skill": "TEXT", "zone_id": "TEXT"})
         _add_cols(conn, "picking_tasks", {"worker_id": "TEXT", "priority": "INTEGER DEFAULT 0"})
         _add_cols(conn, "stocking_tasks", {"worker_id": "TEXT"})
+        _add_cols(conn, "blackboard_actions", {"explanation": "TEXT"})
         conn.commit()
     finally:
         conn.close()
