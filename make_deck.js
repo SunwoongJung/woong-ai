@@ -623,4 +623,231 @@ function codeCard(s, x, y, w, h, head, code) {
   ], { x: 5.15, y: 3.3, w: 4.35, colW: [1.45, 0.8, 1.15, 0.95], rowH: 0.38, border: { pt: 0.5, color: "D6E2E4" }, valign: "middle" });
 }
 
+// #######################################################
+// ##  2026-06-30 누적분 — 창고 자동운영(블랙보드 멀티에이전트)
+// #######################################################
+
+// =======================================================
+// [F0] 날짜 구분 (dark divider)
+// =======================================================
+{
+  const s = pres.addSlide();
+  s.background = { color: DARK };
+  s.addText("PROGRESS UPDATE · 2026.06.30", { x: 0.7, y: 1.2, w: 8.6, h: 0.35, fontFace: F, fontSize: 13, bold: true, color: "7FD1CD", charSpacing: 3, margin: 0 });
+  s.addText("창고 자동운영 — 블랙보드 멀티에이전트", { x: 0.7, y: 1.62, w: 8.6, h: 0.9, fontFace: F, fontSize: 38, bold: true, color: WHITE, margin: 0 });
+  s.addText("실시간 이벤트를 10개 에이전트가 블랙보드(DB)로 협업해 자동 처리하는 구조와 동작 원리",
+    { x: 0.7, y: 2.62, w: 8.6, h: 0.45, fontFace: F, fontSize: 14, color: "CFD8DC", margin: 0 });
+  const batch = [
+    "구조 — 10개 에이전트(도메인 6 · 인프라 4)와 블랙보드",
+    "핵심 — 에이전트는 어떻게 협력하나 (주기 · 신호 · 데이터 읽기)",
+    "연쇄 — 데이터로 흐르는 이벤트 체이닝 (입고→적치→자원)",
+    "의사결정 1 사이클 — 8단계 실행과 가드레일",
+    "대시보드 — ‘창고자동운영’ 탭 동작 가시화",
+  ];
+  batch.forEach((t, i) => {
+    const y = 3.3 + i * 0.42;
+    s.addShape(pres.shapes.OVAL, { x: 0.7, y: y + 0.02, w: 0.3, h: 0.3, fill: { color: ACCENT } });
+    s.addText(String(i + 1), { x: 0.7, y: y + 0.02, w: 0.3, h: 0.3, fontFace: F, fontSize: 12, bold: true, color: WHITE, align: "center", valign: "middle", margin: 0 });
+    s.addText(t, { x: 1.16, y: y - 0.04, w: 8.1, h: 0.4, fontFace: F, fontSize: 12.5, color: "ECEFF1", valign: "middle", margin: 0 });
+  });
+  s.addText("Smart WMS Agent · Blackboard Auto-Execution Layer", { x: 0.7, y: 5.3, w: 8.6, h: 0.3, fontFace: F, fontSize: 11, bold: true, color: "7FD1CD", margin: 0 });
+}
+
+// =======================================================
+// [F1] 구조 — 10개 에이전트 & 블랙보드
+// =======================================================
+{
+  const s = pres.addSlide();
+  s.background = { color: WHITE };
+  slideTitle(s, "AUTO-OPERATION · ARCHITECTURE", "10개 에이전트와 블랙보드");
+  s.addText("에이전트는 서로를 모른다. 공유 게시판(블랙보드=DB)의 상태 변화에만 반응하는 ‘지식원(knowledge source)’이다.",
+    { x: 0.5, y: 1.16, w: 9.0, h: 0.35, fontFace: F, fontSize: 11.5, color: MUTED, margin: 0 });
+
+  s.addText("도메인 에이전트 6 — Action을 ‘제안’만 (DB write 없음)", { x: 0.5, y: 1.62, w: 4.5, h: 0.3, fontFace: F, fontSize: 12, bold: true, color: TEXT, margin: 0 });
+  const dom = [
+    ["Inbound", "입고 도착 → 입고작업"], ["Putaway", "입고완료 → 적치 위치 배정"],
+    ["Picking", "출고주문 → 예약 + 피킹작업"], ["Outbound", "임박 → 우선순위 / 출고준비"],
+    ["Resource", "작업 발생 → 작업자 배정"], ["InventoryRisk", "결품 위험 → 경보(자동실행 금지)"],
+  ];
+  dom.forEach((d, i) => {
+    const x = 0.5 + (i % 2) * 2.32, y = 1.98 + Math.floor(i / 2) * 0.66;
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w: 2.22, h: 0.56, rectRadius: 0.06, fill: { color: LIGHT } });
+    s.addText([
+      { text: d[0] + "  ", options: { bold: true, color: ACCENT, fontSize: 10.5 } },
+      { text: d[1], options: { color: MUTED, fontSize: 8.6, breakLine: true } },
+    ], { x: x + 0.12, y: y + 0.07, w: 2.0, h: 0.44, fontFace: F, valign: "middle", margin: 0, lineSpacingMultiple: 0.96 });
+  });
+
+  s.addText("인프라 에이전트 4 — 공통(cross-cutting)", { x: 5.2, y: 1.62, w: 4.3, h: 0.3, fontFace: F, fontSize: 12, bold: true, color: TEXT, margin: 0 });
+  const inf = [
+    ["Control", "유일한 주기 스케줄러 — 이벤트를 읽어 에이전트에 분배"],
+    ["Policy", "자동실행 가부 게이트(위험 Action 차단)"],
+    ["Simulation", "배치 What-if(DES)로 KPI 과부하 판정 — 백그라운드 캐시"],
+    ["Explanation", "각 Action의 한국어 사유 생성(LLM + 템플릿 폴백)"],
+  ];
+  inf.forEach((d, i) => {
+    const y = 1.98 + i * 0.62;
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 5.2, y, w: 4.3, h: 0.54, rectRadius: 0.06, fill: { color: TINT } });
+    s.addText([
+      { text: d[0] + "  ", options: { bold: true, color: ACCENT, fontSize: 10.5 } },
+      { text: d[1], options: { color: MUTED, fontSize: 9 } },
+    ], { x: 5.34, y: y + 0.05, w: 4.05, h: 0.44, fontFace: F, valign: "middle", margin: 0, lineSpacingMultiple: 0.96 });
+  });
+
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 4.62, w: 9.0, h: 0.92, rectRadius: 0.07, fill: { color: DARK } });
+  s.addText([
+    { text: "블랙보드 = DB 테이블  ", options: { bold: true, color: "7FD1CD" } },
+    { text: "blackboard_events · blackboard_actions · audit_logs · inventory_reservations. ", options: { color: "E6EDEF" } },
+    { text: "모든 협업은 이 게시판을 ‘읽고 쓰는’ 것으로만 이뤄진다 — 에이전트 간 직접 호출은 없다.", options: { color: "B9C6CB" } },
+  ], { x: 0.72, y: 4.62, w: 8.6, h: 0.92, fontFace: F, fontSize: 10.5, valign: "middle", margin: 0, lineSpacingMultiple: 1.05 });
+}
+
+// =======================================================
+// [F2] 핵심 — 에이전트는 어떻게 협력하나 (centerpiece)
+// =======================================================
+{
+  const s = pres.addSlide();
+  s.background = { color: WHITE };
+  slideTitle(s, "AUTO-OPERATION · MECHANISM", "에이전트는 어떻게 협력하나");
+  s.addText("주기적으로 파일을 읽지도, 서로를 직접 부르지도 않는다 — 가운데 블랙보드(이벤트 테이블)를 통해 간접 신호를 주고받는다.",
+    { x: 0.5, y: 1.16, w: 9.0, h: 0.35, fontFace: F, fontSize: 11.5, color: MUTED, margin: 0 });
+  pcard(s, 0.5, 1.6, 2.95, 2.25, "① 유일한 ‘주기적’ 주체 = 컨트롤 루프 1개",
+    "· 1개 스레드가 cycle_seconds(기본 15초)\n   마다 깨어난다.\n· 하는 일: blackboard_events 테이블에서\n   status='NEW' 이벤트만 읽기.\n· 파일을 폴링하는 게 아니라 DB 한\n   테이블을 읽는다.", false);
+  pcard(s, 3.58, 1.6, 2.95, 2.25, "② 에이전트 = ‘수동’ 함수",
+    "· handles(event_type) / propose(event)\n   두 함수뿐 — 타이머·루프 없음.\n· 컨트롤 루프가 이벤트 종류를 보고\n   해당 에이전트를 호출할 때만 동작.\n· 깨워진 그 순간 운영 테이블을 1회\n   조회해 판단(주기 폴링 아님).", true);
+  pcard(s, 6.66, 1.6, 2.84, 2.25, "③ ‘다음 에이전트’ 신호",
+    "· 직접 호출 ✕\n· Executor가 Action을 성공시킨 뒤\n   후속 이벤트 행을 블랙보드에 INSERT.\n· 컨트롤 루프가 그 새 이벤트를 읽어\n   다음 에이전트를 깨운다.\n   → data-driven 연쇄.", false);
+  codeCard(s, 0.5, 4.05, 9.0, 1.45, "control_loop.py — 유일한 주기 주체가 이벤트 테이블을 읽어 분배",
+    "while _running:\n"
+    + "    if settings.enabled():\n"
+    + "        run_once()                 # blackboard_events 읽어 처리\n"
+    + "    time.sleep(cycle_seconds())    # ← 유일한 ‘주기적’ 부분 (기본 15초)\n"
+    + "\n"
+    + "def run_once():\n"
+    + "    for ev in events.new_events():            # status='NEW' 이벤트만\n"
+    + "        for agent in REGISTRY:\n"
+    + "            if agent.handles(ev.type):        # 이 이벤트 담당?\n"
+    + "                for spec in agent.propose(ev):    # Action 제안(읽기 1회)\n"
+    + "                    executor.execute(create(spec))");
+}
+
+// =======================================================
+// [F3] 연쇄 — 이벤트 체이닝 (입고→적치→자원)
+// =======================================================
+{
+  const s = pres.addSlide();
+  s.background = { color: WHITE };
+  slideTitle(s, "AUTO-OPERATION · CHAINING", "데이터로 흐르는 연쇄 — 입고 → 적치 → 자원");
+  s.addText("한 에이전트의 실행 결과(=새 이벤트)가 다음 에이전트를 깨운다. 같은 사이클 안에서 이벤트가 빌 때까지 이어진다.",
+    { x: 0.5, y: 1.16, w: 9.0, h: 0.35, fontFace: F, fontSize: 11.5, color: MUTED, margin: 0 });
+
+  function stageCard(x, name, trig, act, emit) {
+    const y = 1.66, w = 2.86, h = 2.0;
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.07, fill: { color: LIGHT }, shadow: shadow() });
+    s.addText(name, { x: x + 0.16, y: y + 0.13, w: w - 0.32, h: 0.3, fontFace: F, fontSize: 12, bold: true, color: ACCENT, margin: 0 });
+    s.addText([
+      { text: "트리거  ", options: { bold: true, color: TEXT } }, { text: trig, options: { color: MUTED, breakLine: true } },
+      { text: "", options: { fontSize: 5, breakLine: true } },
+      { text: "Action  ", options: { bold: true, color: TEXT } }, { text: act, options: { color: MUTED, breakLine: true } },
+      { text: "", options: { fontSize: 5, breakLine: true } },
+      { text: "→ 발생  ", options: { bold: true, color: ACCENT } }, { text: emit, options: { color: MUTED } },
+    ], { x: x + 0.16, y: y + 0.5, w: w - 0.32, h: h - 0.6, fontFace: F, fontSize: 9, valign: "top", margin: 0, lineSpacingMultiple: 1.04 });
+  }
+  stageCard(0.5, "InboundAgent", "NEW_INBOUND_ARRIVAL", "CREATE_INBOUND_TASK (입고=RECEIVED)", "NEED_PUTAWAY");
+  stageCard(3.58, "PutawayAgent", "NEED_PUTAWAY", "CREATE_PUTAWAY_TASK (적치작업 생성)", "TASK_CREATED");
+  stageCard(6.66, "ResourceAgent", "TASK_CREATED", "ALLOCATE_WORKER (작업자 배정)", "(완료)");
+  [3.46, 6.54].forEach((x) => s.addText("→", { x, y: 1.66, w: 0.16, h: 2.0, fontFace: F, fontSize: 18, bold: true, color: ACCENT, align: "center", valign: "middle", margin: 0 }));
+
+  codeCard(s, 0.5, 3.86, 5.55, 1.6, "executor.py — 성공 후 ‘다음 에이전트’ 신호 = 이벤트 INSERT",
+    "def _emit_followups(action, result):\n"
+    + "  if at == 'CREATE_INBOUND_TASK':\n"
+    + "    events.add_event('NEED_PUTAWAY','inbound', inbound_no)\n"
+    + "  elif at == 'CREATE_PUTAWAY_TASK':\n"
+    + "    events.add_event('TASK_CREATED','task', stocking_task_id)\n"
+    + "  elif at == 'CREATE_PICKING_TASK':\n"
+    + "    events.add_event('TASK_CREATED','task', picking_task_id)");
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 6.2, y: 3.86, w: 3.3, h: 1.6, rectRadius: 0.07, fill: { color: TINT } });
+  s.addText([
+    { text: "출고 흐름도 동일\n", options: { bold: true, color: TEXT } },
+    { text: "NEW_OUTBOUND_ORDER → PickingAgent\n(예약 + 피킹작업) →〔TASK_CREATED〕→\nResourceAgent(작업자 배정).\n\n", options: { color: MUTED } },
+    { text: "에이전트는 서로 모른 채, 블랙보드에 쌓인 이벤트만 보고 자기 일을 한다.", options: { color: ACCENT, italic: true } },
+  ], { x: 6.4, y: 4.0, w: 2.95, h: 1.34, fontFace: F, fontSize: 9.2, valign: "top", margin: 0, lineSpacingMultiple: 1.04 });
+}
+
+// =======================================================
+// [F4] 의사결정 1 사이클 — 8단계 & 가드레일
+// =======================================================
+{
+  const s = pres.addSlide();
+  s.background = { color: WHITE };
+  slideTitle(s, "AUTO-OPERATION · DECISION CYCLE", "의사결정 1 사이클 — 실행 8단계와 가드레일");
+  s.addText("이벤트가 Action으로 실행되기까지 — 자동 상태변경의 유일한 경로(Executor)는 매 단계를 검증·감사한다.",
+    { x: 0.5, y: 1.16, w: 9.0, h: 0.35, fontFace: F, fontSize: 11.5, color: MUTED, margin: 0 });
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 1.6, w: 9.0, h: 0.62, rectRadius: 0.08, fill: { color: TINT } });
+  s.addText([
+    { text: "이벤트 수집 ", options: { bold: true, color: TEXT } }, { text: "→ ", options: { color: MUTED } },
+    { text: "배치 시뮬 게이트 ", options: { bold: true, color: ACCENT } }, { text: "→ ", options: { color: MUTED } },
+    { text: "정책 ", options: { bold: true, color: ACCENT } }, { text: "→ 사전검증 → 락 → ", options: { color: MUTED } },
+    { text: "트랜잭션 실행 ", options: { bold: true, color: TEXT } }, { text: "→ 사후검증 → ", options: { color: MUTED } },
+    { text: "감사 · 후속이벤트", options: { bold: true, color: TEXT } },
+  ], { x: 0.6, y: 1.6, w: 8.8, h: 0.62, fontFace: F, fontSize: 11, align: "center", valign: "middle", margin: 0 });
+
+  const guards = [
+    ["멱등성(Idempotency)", "idempotency_key UNIQUE → 같은 작업 중복 시 SKIPPED_DUPLICATE"],
+    ["예약 단일출처", "가용 = 보유(AVAILABLE) − 예약. 예측·할당·자동운영이 같은 수치 사용"],
+    ["정책 게이트", "위험 Action(재고보정·취소·출고확정 등)은 자동실행 금지 → POLICY_BLOCKED"],
+    ["시뮬 게이트", "배치 What-if 팀 가동률이 임계 이상이면 sim-required Action 보류"],
+  ];
+  guards.forEach((g, i) => {
+    const x = 0.5 + (i % 2) * 4.6, y = 2.45 + Math.floor(i / 2) * 1.05;
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w: 4.4, h: 0.92, rectRadius: 0.07, fill: { color: LIGHT }, shadow: shadow() });
+    s.addText([
+      { text: g[0] + "\n", options: { bold: true, color: ACCENT, fontSize: 11 } },
+      { text: g[1], options: { color: MUTED, fontSize: 9.5 } },
+    ], { x: x + 0.18, y: y + 0.12, w: 4.04, h: 0.68, fontFace: F, valign: "top", margin: 0, lineSpacingMultiple: 1.04 });
+  });
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 4.68, w: 9.0, h: 0.82, rectRadius: 0.07, fill: { color: DARK } });
+  s.addText([
+    { text: "원칙  ", options: { bold: true, color: "7FD1CD" } },
+    { text: "‘무승인 상태변경 0건(HITL)’을 Auto Mode가 위 가드레일과 함께 대체한다. 모든 실행은 8단계 감사로그(EVENT_RECEIVED→…→FINISHED)로 추적된다.", options: { color: "E6EDEF" } },
+  ], { x: 0.72, y: 4.68, w: 8.6, h: 0.82, fontFace: F, fontSize: 10, valign: "middle", margin: 0, lineSpacingMultiple: 1.05 });
+}
+
+// =======================================================
+// [F5] 대시보드 — ‘창고자동운영’ 탭 가시화
+// =======================================================
+{
+  const s = pres.addSlide();
+  s.background = { color: WHITE };
+  slideTitle(s, "AUTO-OPERATION · DASHBOARD", "‘창고자동운영’ 탭 — 동작 가시화");
+  s.addText("10개 에이전트가 동작할 때 원이 점등되고, 단계별 로그·Action·LLM 사유가 실시간으로 쌓인다.",
+    { x: 0.5, y: 1.16, w: 9.0, h: 0.35, fontFace: F, fontSize: 11.5, color: MUTED, margin: 0 });
+
+  // agent grid mock (2 x 5)
+  s.addText("에이전트 보드 (도메인 6 · 인프라 4)", { x: 0.5, y: 1.58, w: 5.0, h: 0.3, fontFace: F, fontSize: 11, bold: true, color: TEXT, margin: 0 });
+  const grid = [["입고", 0], ["적치", 0], ["피킹", 1], ["출고", 0], ["자원", 0], ["위험", 0], ["컨트롤", 0], ["정책", 0], ["시뮬", 0], ["설명", 0]];
+  grid.forEach((g, i) => {
+    const x = 0.5 + (i % 5) * 0.92, y = 1.95 + Math.floor(i / 5) * 0.95;
+    const hot = g[1] === 1;
+    s.addShape(pres.shapes.OVAL, { x, y, w: 0.62, h: 0.62, fill: { color: hot ? ACCENT : LIGHT }, line: { color: hot ? ACCENT : "C9D6D8", width: hot ? 2 : 1 } });
+    s.addText(g[0], { x: x - 0.12, y: y + 0.62, w: 0.86, h: 0.26, fontFace: F, fontSize: 8.5, color: hot ? ACCENT : MUTED, align: "center", bold: hot, margin: 0 });
+  });
+
+  pcard(s, 5.2, 1.58, 4.3, 1.5, "실시간 동작 로그",
+    "· 감사 8단계를 에이전트·결과 색상으로 표시\n· 신규 줄만 증분 추가(깜빡임 없음)\n· 동작한 에이전트 원이 1.2초 점등", true);
+  pcard(s, 5.2, 3.18, 4.3, 1.05, "Action 타임라인",
+    "· 처리 시각 · 에이전트 · 상태 배지(성공/차단/실패)\n· 클릭 → 하단에 LLM 한국어 사유", false);
+
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.5, y: 4.4, w: 4.45, h: 1.1, rectRadius: 0.07, fill: { color: DARK } });
+  s.addText([
+    { text: "한 건씩 가시화\n", options: { bold: true, color: "7FD1CD" } },
+    { text: "Action 간 step_delay(기본 1.2초)로 흐름을 눈으로 확인. 시뮬 DES(수 초)는 백그라운드 캐시라 사이클을 막지 않음.", options: { color: "E6EDEF" } },
+  ], { x: 0.72, y: 4.52, w: 4.05, h: 0.92, fontFace: F, fontSize: 9.5, valign: "top", margin: 0, lineSpacingMultiple: 1.05 });
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 5.05, y: 4.4, w: 4.45, h: 1.1, rectRadius: 0.07, fill: { color: TINT } });
+  s.addText([
+    { text: "안전 가동 조건\n", options: { bold: true, color: ACCENT } },
+    { text: "‘실시간 수요’ ON 일 때만 자동운영 시작 가능. Auto Mode는 기본 OFF — 켜야 컨트롤 루프가 돈다.", options: { color: MUTED } },
+  ], { x: 5.27, y: 4.52, w: 4.05, h: 0.92, fontFace: F, fontSize: 9.5, valign: "top", margin: 0, lineSpacingMultiple: 1.05 });
+}
+
 pres.writeFile({ fileName: "Smart_WMS_Agent_기획요약.pptx" }).then(() => console.log("done"));
