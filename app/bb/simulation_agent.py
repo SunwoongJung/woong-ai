@@ -1,51 +1,75 @@
-"""Simulation Agent — 배치 What-if(DES) KPI 게이트.
+"""Simulation Agent — 배치 What-if(DES) KPI 게이트 (노동/공간 2차원).
 
-DES는 수 초가 걸리므로 의사결정 사이클을 블로킹하지 않도록 결과를 캐시한다.
-- gate(): 캐시를 '즉시' 반환(논블로킹). 오래됐으면 백그라운드 스레드로 갱신만 트리거.
-- evaluate(): DES를 실제로 돌려 캐시를 갱신(백그라운드 작업·명시 호출용).
-컨트롤 루프는 gate()만 사용하므로 한 건씩 흐르는 흐름이 시뮬레이션에 막히지 않는다.
+DES는 수 초가 걸리므로 사이클을 막지 않도록 결과를 캐시한다.
+- gate(): 캐시를 '즉시' 반환(논블로킹). 오래됐으면 백그라운드 갱신만 트리거.
+- evaluate(): DES를 실제로 돌려 캐시 갱신(백그라운드/명시 호출용).
+게이트는 두 병목을 구분한다:
+  · 노동(팀 가동률, 09-18 기준)  → 피킹·우선순위·작업자배정
+  · 공간(존별 예측 점유율 피크)  → 적치·입고 (적치는 목표 존 기준)
 """
 import threading
 import time
 
 from bb import settings
 
-# 시뮬 결과로 게이팅하는 Action(작업 부하·자원에 영향). 입고/출고확정 등은 게이팅 대상 아님.
-SIM_REQUIRED = {"CREATE_PICKING_TASK", "CREATE_PUTAWAY_TASK", "REPRIORITIZE_PICKING_TASK", "ALLOCATE_WORKER"}
+# 노동/공간 게이트 대상 Action
+LABOR_GATED = {"CREATE_PICKING_TASK", "REPRIORITIZE_PICKING_TASK", "ALLOCATE_WORKER"}
+SPACE_GATED = {"CREATE_PUTAWAY_TASK", "CREATE_INBOUND_TASK"}
+SIM_REQUIRED = LABOR_GATED | SPACE_GATED   # 하위호환
 
-_CACHE = {"ok": True, "ran": False, "reason": "시뮬 준비 중", "kpis": {}, "ts": None}
+# 캐시에는 '원시 KPI'만 저장(임계값은 굽지 않는다) — 임계 비교는 gate() 읽기 시점에 최신 설정으로.
+_CACHE = {"ran": False, "kpis": {}, "zone_peak": {}, "team_count": None, "ts": None}
 _lock = threading.Lock()
 _refreshing = False
 
 
-def _run_des(horizon_days: int, replications: int) -> dict:
+def _run_des() -> dict:
     from sim import des
-    r = des.run_des_simulation(horizon_days=horizon_days, replications=replications, persist=False)
+    r = des.run_des_simulation(horizon_days=settings.sim_horizon_days(),
+                               replications=settings.sim_replications(), persist=False)
     k = {x["kpi_name"]: x for x in r.get("kpis", [])}
     util = (k.get("resource_utilization_team") or {}).get("mean")
     delay = (k.get("shipping_delay_count") or {}).get("mean")
-    block = settings.util_block()
-    overloaded = util is not None and util >= block
-    return {
-        "ok": not overloaded, "ran": True,
-        "reason": (f"팀 가동률 {util*100:.0f}% ≥ 임계 {block*100:.0f}% — 과부하 보류"
-                   if overloaded else f"팀 가동률 {util*100:.0f}% — 정상"),
-        "team_count": r.get("params", {}).get("team_count"),
-        "kpis": {"resource_utilization_team": util, "shipping_delay_count": delay},
-        "ts": time.time(),
-    }
+    # 존별 예측 점유율 피크(시뮬 타임시리즈에서 존별 최댓값)
+    zone_peak: dict = {}
+    for snap in (r.get("zone_occupancy_timeseries") or []):
+        for z, occ in (snap.get("occupancy") or {}).items():
+            if occ > zone_peak.get(z, 0):
+                zone_peak[z] = occ
+    return {"ran": True, "zone_peak": zone_peak, "team_count": r.get("params", {}).get("team_count"),
+            "kpis": {"resource_utilization_team": util, "shipping_delay_count": delay}, "ts": time.time()}
 
 
-def evaluate(horizon_days: int = 3, replications: int = 5) -> dict:
-    """DES 실행(블로킹) → 캐시 갱신·반환. 게이트용이라 가벼운 파라미터(과부하 신호만 필요)."""
+def evaluate() -> dict:
+    """DES 실행(블로킹) → 원시 KPI 캐시 갱신. 반환은 gate()와 동일 형식."""
     global _CACHE
     try:
-        res = _run_des(horizon_days, replications)
+        res = _run_des()
     except Exception as e:  # noqa: BLE001 — 실패 시 게이트 통과(자동운영 막지 않음)
-        res = {"ok": True, "ran": False, "reason": f"시뮬 생략(오류: {e})", "kpis": {}, "ts": time.time()}
+        res = {"ran": False, "kpis": {}, "zone_peak": {}, "team_count": None,
+               "error": str(e), "ts": time.time()}
     with _lock:
         _CACHE = res
-    return dict(res)
+    return _decorate(dict(res))
+
+
+def _decorate(c: dict) -> dict:
+    """원시 캐시에 '현재 임계값' 기준의 판정(labor_ok·space_ok·ok·reason)을 입힌다."""
+    ub, zb = settings.util_block(), settings.zone_block()
+    util = (c.get("kpis") or {}).get("resource_utilization_team")
+    zp = c.get("zone_peak") or {}
+    worst = max(zp.items(), key=lambda kv: kv[1], default=(None, 0))
+    c["labor_ok"] = (util is None) or (util <= ub)
+    c["space_ok"] = worst[1] <= zb
+    c["ok"] = c["labor_ok"] and c["space_ok"]
+    c["util_block"], c["zone_block"] = ub, zb
+    c["worst_zone"], c["worst_zone_occ"] = worst
+    if not c.get("ran"):
+        c["reason"] = c.get("error") and f"시뮬 생략(오류: {c['error']})" or "시뮬 준비 중"
+    else:
+        us = f"{util*100:.0f}%" if util is not None else "—"
+        c["reason"] = f"가동률 {us}(임계 {ub*100:.0f}%) · 최대존점유 {worst[1]*100:.0f}%(임계 {zb*100:.0f}%)"
+    return c
 
 
 def _async_refresh() -> None:
@@ -67,13 +91,13 @@ def _async_refresh() -> None:
 
 
 def gate() -> dict:
-    """캐시 즉시 반환(논블로킹). 캐시가 없거나 오래됐으면 백그라운드 갱신을 트리거."""
+    """캐시 즉시 반환(논블로킹) + 현재 임계값 기준 판정 부여. 오래됐으면 백그라운드 갱신 트리거."""
     with _lock:
         c = dict(_CACHE)
     age = (time.time() - c["ts"]) if c.get("ts") else None
     if c["ts"] is None or (age is not None and age > settings.sim_refresh_seconds()):
         _async_refresh()
-    return c
+    return _decorate(c)
 
 
 def kick() -> None:

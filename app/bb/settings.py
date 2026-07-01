@@ -10,9 +10,12 @@ DEFAULTS = {
     "auto_mode_cycle_interval_seconds": "15",   # 의사결정 주기(초)
     "auto_mode_simulation_required": "true",
     "auto_mode_risk_threshold": "0.7",
-    "auto_mode_util_block": "0.95",             # 배치 시뮬 팀 가동률 차단 임계
+    "auto_mode_util_block": "1.0",              # 가동률 과부하 임계(초과 시 노동계열 보류). 1.0=기본 비활성
+    "auto_mode_zone_block": "0.95",             # 존 점유율 과부하 임계(초과 시 공간계열 보류)
     "auto_mode_step_delay_seconds": "1.2",      # Action 1건 처리 사이 지연(가시화)
     "auto_mode_sim_refresh_seconds": "30",      # 시뮬 KPI 캐시 갱신 주기(백그라운드)
+    "auto_mode_sim_horizon_days": "3",          # 게이트 DES horizon(일)
+    "auto_mode_sim_replications": "5",          # 게이트 DES 반복수
 }
 
 
@@ -22,6 +25,8 @@ def init_defaults() -> None:
     try:
         for k, v in DEFAULTS.items():
             conn.execute("INSERT OR IGNORE INTO system_settings(key,value,updated_at) VALUES(?,?,?)", (k, v, now()))
+        # 마이그레이션: 09-18 가동률 기준으로 바뀌며 값이 100%까지 오르므로, 옛 기본값(0.95)이면 완화(1.0)
+        conn.execute("UPDATE system_settings SET value='1.0' WHERE key='auto_mode_util_block' AND value='0.95'")
         conn.commit()
     finally:
         conn.close()
@@ -103,3 +108,24 @@ def sim_refresh_seconds() -> int:
         return max(5, int(float(get("auto_mode_sim_refresh_seconds", 30))))
     except (TypeError, ValueError):
         return 30
+
+
+def zone_block() -> float:
+    try:
+        return float(get("auto_mode_zone_block", 0.95))
+    except (TypeError, ValueError):
+        return 0.95
+
+
+def sim_horizon_days() -> int:
+    try:
+        return max(1, int(float(get("auto_mode_sim_horizon_days", 3))))
+    except (TypeError, ValueError):
+        return 3
+
+
+def sim_replications() -> int:
+    try:
+        return max(1, int(float(get("auto_mode_sim_replications", 5))))
+    except (TypeError, ValueError):
+        return 5

@@ -11,6 +11,34 @@ from bb.agents import REGISTRY
 from bb.store import ensure_schema, now
 
 
+_ZONE_CACHE: dict = {}
+
+
+def _zone_of(location_id):
+    if not location_id:
+        return None
+    if location_id not in _ZONE_CACHE:
+        from tools.common import q
+        r = q("SELECT zone_id FROM locations WHERE location_id=?", (location_id,))
+        _ZONE_CACHE[location_id] = r[0]["zone_id"] if r else None
+    return _ZONE_CACHE[location_id]
+
+
+def _gate_block(action_type: str, payload: dict, g: dict):
+    """노동/공간 2차원 게이트 → 차단 사유(문자열) 또는 None."""
+    if action_type in simulation_agent.LABOR_GATED and not g.get("labor_ok", True):
+        u = (g.get("kpis") or {}).get("resource_utilization_team")
+        return f"가동률 과부하({u*100:.0f}%)" if u is not None else "가동률 과부하"
+    if action_type in simulation_agent.SPACE_GATED:
+        zb = g.get("zone_block", 1.0)
+        zp = g.get("zone_peak") or {}
+        zone = _zone_of(payload.get("location_id"))       # 적치: 목표 존
+        occ = zp.get(zone) if zone else g.get("worst_zone_occ")   # 입고 등: 최악 존
+        if occ is not None and occ > zb:
+            return f"보관공간 과부하({zone or '전체'} {occ*100:.0f}%)"
+    return None
+
+
 def run_once(force: bool = False, step_delay: float | None = None) -> dict:
     """1 사이클: NEW 이벤트 → 에이전트 propose → Action 생성·실행. 실행 중 발생한 체인 이벤트
     (NEED_PUTAWAY·TASK_CREATED)도 같은 사이클에서 소진(budget·pass 상한).
@@ -54,15 +82,16 @@ def run_once(force: bool = False, step_delay: float | None = None) -> dict:
                         audit.log("ACTION_CREATED", "OK", action_id=res["action_id"], event_id=ev["event_id"],
                                   agent_name=spec["agent_name"], action_type=spec["action_type"],
                                   message=spec.get("reason"))
-                        if spec["action_type"] in simulation_agent.SIM_REQUIRED and not sim_gate["ok"]:
+                        block = _gate_block(spec["action_type"], spec.get("payload") or {}, sim_gate)
+                        if block:
                             actions.update(res["action_id"], status="POLICY_BLOCKED",
-                                           reason=f"배치 시뮬 차단: {sim_gate['reason']}", finished_at=now())
+                                           reason=f"배치 시뮬 차단: {block}", finished_at=now())
                             audit.log("POLICY_CHECK", "BLOCKED", action_id=res["action_id"], event_id=ev["event_id"],
                                       agent_name=spec["agent_name"], action_type=spec["action_type"],
-                                      message=f"시뮬 KPI: {sim_gate['reason']}")
+                                      message=f"시뮬 게이트: {block}")
                             out["executed"].append({"action_id": res["action_id"], "agent": spec["agent_name"],
                                                     "type": spec["action_type"], "status": "POLICY_BLOCKED",
-                                                    "reason": sim_gate["reason"]})
+                                                    "reason": block})
                         else:
                             r = executor.execute(res["action_id"])
                             out["executed"].append({"action_id": res["action_id"], "agent": spec["agent_name"],

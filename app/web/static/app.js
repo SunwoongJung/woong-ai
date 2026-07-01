@@ -1172,8 +1172,12 @@ function setSimbar(s) {
   if (!s || s.ran === false) { el.className = "auto-simbar"; el.innerHTML = `<span class="sim-ic">🧊</span> 배치 시뮬레이션 — ${s && s.reason ? escapeHtml(s.reason) : "대기"}`; return; }
   const k = s.kpis || {};
   const util = k.resource_utilization_team != null ? Math.round(k.resource_utilization_team * 100) + "%" : "—";
+  const zone = s.worst_zone_occ != null ? Math.round(s.worst_zone_occ * 100) + "%" : "—";
   el.className = "auto-simbar " + (s.ok ? "ok" : "blk");
-  el.innerHTML = `<span class="sim-ic">🧊</span> 배치 시뮬: 팀 가동률 <b>${util}</b> · 출고지연 ${fmtNum(k.shipping_delay_count, 0)}건 — ${s.ok ? "정상(실행 허용)" : "과부하(자동작업 보류)"}`;
+  el.innerHTML = `<span class="sim-ic">🧊</span> 배치 시뮬 · `
+    + `노동(가동률) <b class="${s.labor_ok ? "" : "over"}">${util}</b> ${s.labor_ok ? "정상" : "과부하"} · `
+    + `공간(최대존) <b class="${s.space_ok ? "" : "over"}">${zone}</b>${s.worst_zone ? " " + escapeHtml(s.worst_zone) : ""} ${s.space_ok ? "정상" : "과부하"} · `
+    + `출고지연 ${fmtNum(k.shipping_delay_count, 0)}건`;
 }
 
 function updateAutoToggle(enabled) {
@@ -1194,6 +1198,9 @@ async function pollAuto() {
     if ($("#auto-cycle") && document.activeElement !== $("#auto-cycle")) {
       $("#auto-cycle").value = mode.auto_mode_cycle_interval_seconds || 15;
     }
+    document.querySelectorAll("#auto-settings input[data-key]").forEach((inp) => {
+      if (document.activeElement !== inp && mode[inp.dataset.key] != null) inp.value = mode[inp.dataset.key];
+    });
     const all = logs.logs || [];                       // 서버는 최신순(DESC)
     const fresh = all.filter((l) => !AUTO.renderedLogs.has(l.log_id));
     if (fresh.length) {
@@ -1262,6 +1269,13 @@ function setupAuto() {
     const v = Math.max(2, Math.min(600, Number(e.target.value) || 15));
     fetch("/api/auto-mode/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key: "auto_mode_cycle_interval_seconds", value: String(v) }) }).catch(() => {});
+  });
+  document.querySelectorAll("#auto-settings input[data-key]").forEach((inp) => {
+    inp.addEventListener("change", () => {
+      fetch("/api/auto-mode/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: inp.dataset.key, value: String(inp.value) }) })
+        .then(() => refreshSimbar()).catch(() => {});
+    });
   });
   $("#auto-actions").addEventListener("click", (e) => {
     const c = e.target.closest(".aact"); if (c) selectAutoAction(c.dataset.id).catch(() => {});

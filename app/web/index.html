@@ -254,6 +254,16 @@
 
         <div class="auto-simbar" id="auto-simbar"><span class="sim-ic">🧊</span> 배치 시뮬레이션 — 대기</div>
 
+        <div class="auto-settings" id="auto-settings">
+          <span class="as-title">게이트 설정</span>
+          <label>Action간격 <input id="set-step" type="number" min="0" max="10" step="0.1" data-key="auto_mode_step_delay_seconds"> 초</label>
+          <label>시뮬 horizon <input id="set-horizon" type="number" min="1" max="30" data-key="auto_mode_sim_horizon_days"> 일</label>
+          <label>반복 <input id="set-reps" type="number" min="1" max="100" data-key="auto_mode_sim_replications"></label>
+          <label>시뮬 갱신 <input id="set-refresh" type="number" min="5" max="600" data-key="auto_mode_sim_refresh_seconds"> 초</label>
+          <label>가동률 임계 <input id="set-util" type="number" min="0" max="2" step="0.05" data-key="auto_mode_util_block"></label>
+          <label>존점유 임계 <input id="set-zone" type="number" min="0" max="1" step="0.05" data-key="auto_mode_zone_block"></label>
+        </div>
+
         <div class="auto-agents" id="auto-agents"></div>
 
         <div class="grid-2 auto-grid">

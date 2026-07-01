@@ -388,6 +388,12 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 .auto-simbar.ok { background: #eefaf2; border-color: #bfe7cd; }
 .auto-simbar.blk { background: #fef3f1; border-color: #f4c9c2; }
 .auto-simbar .sim-ic { margin-right: 4px; }
+.auto-simbar b.over { color: var(--red); }
+
+.auto-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 14px; padding: 9px 14px; border: 1px dashed var(--line); border-radius: 10px; background: #fafcff; }
+.auto-settings .as-title { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
+.auto-settings label { font-size: 12px; color: var(--ink-sub); display: inline-flex; align-items: center; gap: 5px; }
+.auto-settings input { width: 60px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px; font-size: 12.5px; }
 
 .auto-agents { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
 .agent-cell { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 8px 11px; text-align: center; cursor: pointer; transition: transform .15s, box-shadow .25s, border-color .25s; box-shadow: var(--shadow); }
