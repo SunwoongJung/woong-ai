@@ -1,8 +1,8 @@
 const pptxgen = require("pptxgenjs");
 const p = new pptxgen();
 p.layout = "LAYOUT_WIDE"; // 13.33 x 7.5
-p.author = "Smart WMS Agent";
-p.title = "Smart WMS Agent — 진행 현황";
+p.author = "WOONG AI";
+p.title = "WOONG AI — 진행 현황";
 
 const NAVY = "1E2761", BLUE = "2F6BFF", ICE = "E8EEFC", INK = "20262F",
       SUB = "6B7480", GREEN = "16A34A", WHITE = "FFFFFF",
@@ -35,7 +35,7 @@ function arrow(s, x, y) { s.addText("›", { x, y, w: 0.2, h: 0.5, fontFace: F, 
 let s = p.addSlide(); s.background = { color: NAVY };
 s.addShape(p.shapes.OVAL, { x: 0.9, y: 2.3, w: 0.9, h: 0.9, fill: { color: BLUE }, line: { type: "none" } });
 s.addText("📦", { x: 0.9, y: 2.3, w: 0.9, h: 0.9, fontSize: 30, align: "center", valign: "middle", margin: 0 });
-s.addText("Smart WMS Agent", { x: 1.95, y: 2.35, w: 10.5, h: 0.95, fontFace: F, fontSize: 44, bold: true, color: WHITE, margin: 0 });
+s.addText("WOONG AI", { x: 1.95, y: 2.35, w: 10.5, h: 0.95, fontFace: F, fontSize: 44, bold: true, color: WHITE, margin: 0 });
 s.addText("진행 현황 보고 — POC 구현 & UI 리디자인", { x: 2.0, y: 3.35, w: 10.5, h: 0.5, fontFace: F, fontSize: 18, color: ICE, margin: 0 });
 s.addText("문서 탐색(RAG) · AI 디자인 패턴 · LangGraph 아키텍처 + 운영 기능 확장 · 2026-06-25", { x: 2.0, y: 3.9, w: 10.5, h: 0.4, fontFace: F, fontSize: 12.5, color: "AEB9E6", margin: 0 });
 
@@ -198,4 +198,4 @@ s.addText([
   { text: "단일 기법의 약점을 서로의 강점으로 메워 ‘근거 있고(RAG) · 검증되며(루프·하네스) · 현실적인(DES)’ 운영 의사결정 지원을 만든다.", options: { color: ICE } },
 ], { x: 0.85, y: 5.96, w: 11.6, h: 1.15, fontFace: F, fontSize: 12.5, valign: "middle", margin: 0, lineSpacingMultiple: 1.08 });
 
-p.writeFile({ fileName: "Smart_WMS_Agent_진행현황.pptx" }).then((f) => console.log("written:", f));
+p.writeFile({ fileName: "WOONG_AI_진행현황.pptx" }).then((f) => console.log("written:", f));
