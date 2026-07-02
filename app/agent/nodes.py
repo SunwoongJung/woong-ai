@@ -40,6 +40,9 @@ def router_node(state: dict) -> dict:
         "- inventory_risk: 특정 SKU 소진/위험. 예: \"SKU_A001 언제 소진돼?\"\n"
         "- kpi_query: 운영 KPI 조회. 예: \"Zone 점유율 보여줘\", \"출고 정시율 어때?\"\n"
         "- simulation_query: 창고상황 예측·What-if. 예: \"이번 주 예측\", \"작업자 1명 늘리면?\"\n"
+        "- workload_estimate: 적치·피킹·출고확정의 '완료 예상시간·소요시간·작업량', 가용 작업팀 수, "
+        "'오늘 다 끝낼 수 있는지'. 예: \"적치대기 완료 예상시간\", \"피킹 얼마나 걸려\", \"오늘 물량 다 처리 가능?\", "
+        "\"가용 작업팀 몇 조야?\". parameters.scope에 영역을 넣는다(stocking|picking|shipping|all).\n"
         "- daily_summary: \"오늘 뭐 해야 돼?\" 류 종합. 특정 영역만 요약/정리 요청도 daily_summary로 분류하고 "
         "parameters.scope에 영역을 넣는다(all|inbound|outbound|picking|risk|shipping). "
         "예: \"입고 업무만 요약\"·\"적치대기만 정리\"→scope=inbound, \"출고만 정리\"→scope=outbound, "
@@ -99,7 +102,15 @@ def _h_daily_summary(p):
     scope = p.get("scope") or "all"
     out = {"_scope": scope}
     if scope in ("all", "inbound"):
-        out["stocking_wait"] = lookups.lookup_inbound_orders(["RECEIVED"])["orders"]    # 적치대기
+        summ = stocking.summarize_backlog()      # 총계·날짜별·중복SKU (집계 수치는 이것을 근거로)
+        waits = sorted(lookups.lookup_inbound_orders(["RECEIVED"])["orders"],
+                       key=lambda o: (o.get("expected_date") or "", o.get("inbound_no") or ""))
+        out["stocking_summary"] = summ
+        out["stocking_wait_total"] = summ["total_count"]
+        out["stocking_wait"] = waits[:20]        # 상세는 오래된 순 상위 20건 샘플
+        if len(waits) > 20:
+            out["stocking_wait_note"] = (f"적치 대기 총 {summ['total_count']}건 중 오래된 상위 20건만 표시. "
+                                         "건수·날짜별·중복 집계는 stocking_summary를 근거로 답할 것")
         if scope == "inbound":  # 입고 전용 요약에선 입고예정도 함께(전체 '할 일'엔 미포함)
             out["inbound_planned"] = lookups.lookup_inbound_orders(["PLANNED"])["orders"]
     if scope in ("all", "picking", "outbound"):
@@ -188,6 +199,11 @@ def _h_replenishment_query(p):
     return replenishment.scan_replenishment()
 
 
+def _h_workload_estimate(p):
+    from tools import workload
+    return workload.estimate_workload(scope=p.get("scope") or "all", current_datetime=_current_dt())
+
+
 def _h_replenish_create(p):
     return {"draft": drafts.create_replenishment_draft(p["sku"])}
 
@@ -202,6 +218,7 @@ _HANDLERS = {
     "replenishment_query": _h_replenishment_query, "replenish_create": _h_replenish_create,
     "risk_response_recommendation": _h_risk_response, "stocking_task_create": _h_stocking_create,
     "picking_instruction_create": _h_picking_create, "shipping_confirm": _h_shipping_confirm,
+    "workload_estimate": _h_workload_estimate,
     "policy_question": lambda p: {}, "smalltalk": lambda p: {},
     "greeting": lambda p: {}, "out_of_scope": lambda p: {},
 }

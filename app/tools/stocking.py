@@ -120,3 +120,24 @@ def recommend_stocking(inbound_no: str) -> dict:
     return {"recommended_location_id": best["location_id"], "score": best["score"],
             "breakdown": bd, "reasons": reasons, "candidates": scored[:5],
             "approval_required": True}
+
+
+def summarize_backlog() -> dict:
+    """적치 대기(RECEIVED·미적치) 물량 집계 — 날짜별 건수·수량, 중복 SKU 합산, 총계."""
+    rows = q("""SELECT inbound_no, sku, qty, expected_date FROM inbound_orders
+                WHERE status='RECEIVED' ORDER BY expected_date, inbound_no""")
+    by_date, sku_map, total_qty = {}, {}, 0
+    for r in rows:
+        d = r["expected_date"]
+        by_date.setdefault(d, {"count": 0, "qty": 0})
+        by_date[d]["count"] += 1
+        by_date[d]["qty"] += r["qty"]
+        sku_map.setdefault(r["sku"], {"count": 0, "qty": 0})
+        sku_map[r["sku"]]["count"] += 1
+        sku_map[r["sku"]]["qty"] += r["qty"]
+        total_qty += r["qty"]
+    dups = sorted(({"sku": k, "count": v["count"], "qty": v["qty"]}
+                   for k, v in sku_map.items() if v["count"] > 1), key=lambda x: -x["qty"])
+    return {"total_count": len(rows), "total_qty": total_qty, "distinct_sku": len(sku_map),
+            "by_date": [{"expected_date": k, **v} for k, v in sorted(by_date.items())],
+            "sku_duplicates": dups}

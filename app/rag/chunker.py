@@ -21,6 +21,7 @@ FILE_META = {
 # 헤딩 부분문자열 → section id (docs/03 §5)
 SECTION_MAP = {
     "동일 SKU": "same_sku_policy", "잔여용량": "capacity_policy", "거리": "distance_policy", "고회전": "fast_moving_policy",
+    "적치 SLA": "stocking_sla", "적치 우선순위": "stocking_priority_policy", "반품 입고": "return_inbound_priority",
     "피킹 시작": "picking_start_time", "예상 피킹": "picking_time_estimation", "우선순위": "picking_priority_policy",
     "위험등급": "risk_level", "Fallback": "forecast_fallback", "데이터 부족": "forecast_fallback",
     "재고 부족": "sop_stock_shortage", "CAPA": "sop_capacity_shortage", "Location 없음": "sop_no_available_location",
