@@ -93,17 +93,35 @@ def _synthetic_utilization(dates: list[str]) -> dict:
     return {r["fill_date"]: r["value"] for r in rows}
 
 
+def _demand_utilization() -> float | None:
+    """현재 대기 물량(적치+피킹+출고확정) 대비 팀 일일 가용시간 기준 실측 가동률.
+
+    백로그(총 작업분)가 팀의 하루 처리 용량(팀수×540분)을 넘으면 팀은 종일 가동 상태이므로 100%로 상한한다.
+    완료 로그가 없다고 랜덤 합성값을 쓰던 종전 방식(밀린 물량 미반영)을 대체한다."""
+    from tools import workload
+    wl = workload.estimate_workload(scope="all")
+    teams = max(1, wl.get("total_teams") or 1)
+    cap = teams * WORK_MINUTES_PER_DAY
+    if cap <= 0:
+        return None
+    return round(min(1.0, (wl.get("total_work_minutes") or 0.0) / cap), 3)
+
+
 def team_utilization_trend(days: int = 7, end_date: str | None = None) -> list[dict]:
     dates = _day_range(end_date or reference_date(), days)
     real = {d: _real_utilization(d) for d in dates}
     need_synth = [d for d in dates if real[d] is None]
     synth = _synthetic_utilization(need_synth) if need_synth else {}
-    return [{"date": d, "value": real[d] if real[d] is not None else synth.get(d)} for d in dates]
+    out = [{"date": d, "value": real[d] if real[d] is not None else synth.get(d)} for d in dates]
+    live = _demand_utilization()                 # 최신 시점은 실제 백로그 기반 가동률로(KPI 카드와 일치)
+    if out and live is not None:
+        out[-1]["value"] = live
+    return out
 
 
 def team_utilization_current(end_date: str | None = None) -> float | None:
-    trend = team_utilization_trend(days=1, end_date=end_date)
-    return trend[0]["value"] if trend else None
+    """KPI 카드용 현재 가동률 — 대기 물량 대비 팀 용량(밀린 물량이 많으면 100%)."""
+    return _demand_utilization()
 
 
 # ---------- 3) 출고지연 / 4) 적치지연 ----------

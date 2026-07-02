@@ -121,3 +121,33 @@ def replenish_now(order_no: str) -> dict:
         events.add_event("INVENTORY_CHANGED", "sku", s["sku"], {"qty": s["qty"]}, source="replenish-now")
     resumed = resume_fillable()
     return {"order_no": order_no, "stocked": stocked, "resumed": resumed}
+
+
+def stock_inbound_now(inbound_no: str) -> dict:
+    """단건 입고(발주 등)를 가상 즉시 입고·적치 완료 처리(실제 재고 반영) 후 충족 가능 대기주문 재개.
+    '바로 보충'과 동일 효과 — Approval 탭의 발주 실행 내역에서 입고 전 건에 사용."""
+    r = q("SELECT inbound_no, sku, qty, status FROM inbound_orders WHERE inbound_no=?", (inbound_no,))
+    if not r:
+        return {"error": "입고 건을 찾을 수 없습니다"}
+    ib = r[0]
+    if ib["status"] == "STOCKED":
+        return {"error": "이미 입고 완료된 건입니다"}
+    conn = get_connection()
+    try:
+        loc = _pick_location(ib["sku"])
+        if loc:
+            conn.execute("""INSERT INTO inventory(sku,lot_no,location_id,qty,inbound_date,expiry_date,status)
+                            VALUES(?,?,?,?,?,NULL,'AVAILABLE')""",
+                         (ib["sku"], f"PO-{ib['inbound_no']}", loc, ib["qty"], now()[:10]))
+            conn.execute("UPDATE locations SET occupied_qty=occupied_qty+? WHERE location_id=?",
+                         (ib["qty"], loc))
+        conn.execute("UPDATE inbound_orders SET status='STOCKED', received_datetime=? WHERE inbound_no=?",
+                     (now(), inbound_no))
+        conn.commit()
+    finally:
+        conn.close()
+    events.add_event("INVENTORY_CHANGED", "sku", ib["sku"], {"qty": ib["qty"]}, source="stock-now")
+    resumed = resume_fillable()
+    return {"inbound_no": inbound_no, "sku": ib["sku"], "qty": ib["qty"],
+            "location_id": loc, "resumed": resumed,
+            "stocked": [{"inbound_no": inbound_no, "sku": ib["sku"], "qty": ib["qty"]}]}

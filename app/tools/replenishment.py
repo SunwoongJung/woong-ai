@@ -101,3 +101,15 @@ def execute_replenishment(sku: str, from_location: str, to_location: str, qty: i
         conn.close()
     return {"sku": sku, "from_location": from_location, "to_location": to_location,
             "moved_qty": moved, "shortfall": remaining}
+
+
+def execute_for_sku(sku: str) -> dict:
+    """해당 SKU가 보충 추천 대상이면 보관→피킹면 이동을 즉시 실행(승인 불필요·자동).
+
+    적치 완료 등으로 보관 재고가 생긴 SKU의 피킹면을 자동 보충하는 데 쓴다. 대상이 아니면 no-op."""
+    rec = next((r for r in scan_replenishment()["recommendations"] if r["sku"] == sku), None)
+    if not rec:
+        return {"sku": sku, "replenished": False, "reason": "보충 대상 아님(피킹면 충분 또는 보관재고 없음)"}
+    res = execute_replenishment(sku, rec["from_location"], rec["pick_location"], rec["recommend_qty"])
+    res["replenished"] = res.get("moved_qty", 0) > 0
+    return res

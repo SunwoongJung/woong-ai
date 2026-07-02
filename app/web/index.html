@@ -135,6 +135,14 @@
             <div class="composer-foot">WOONG AI는 실수를 할 수 있습니다. 중요한 수치는 확인하세요.</div>
           </div>
         </div>
+        <aside class="todo-panel hidden" id="todo-panel">
+          <div class="todo-head">
+            <div><span class="todo-title">오늘 할 일</span>
+              <span class="todo-hint">승인=즉시 실행 · 보류=Approval 대기</span></div>
+            <button class="todo-close" id="todo-close" title="닫기" aria-label="닫기">✕</button>
+          </div>
+          <div class="todo-body" id="todo-body">불러오는 중…</div>
+        </aside>
       </section>
       <section class="tab-panel hidden" id="panel-kpi">
         <div class="kpi-board">
@@ -236,7 +244,7 @@
           <div class="kpi-board-head">
             <div>
               <div class="kpi-board-title">Approval</div>
-              <div class="kpi-board-sub">상태 변경(할당·적치·피킹·출고확정·보충·처분) 승인 대기 작업을 검토·처리합니다.</div>
+              <div class="kpi-board-sub">상태 변경(적치·피킹·출고확정·발주) 승인 대기 작업을 검토·처리합니다. (할당·보충은 자동 수행)</div>
             </div>
             <button class="btn-ghost" id="refresh-approval">새로고침</button>
           </div>

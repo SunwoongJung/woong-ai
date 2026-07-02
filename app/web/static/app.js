@@ -717,7 +717,7 @@ async function openSession(sid) {
 }
 
 /* ---------- Agent Chat ---------- */
-const CHAT_SUGGESTS = ["오늘 뭐 해야 돼?", "SKU_A001 언제 소진돼?", "왜 Zone A를 추천했어?", "이번 주 창고 상황 예측해줘"];
+const CHAT_SUGGESTS = ["오늘 뭐 해야 돼?", "KPI 상황 알려줘", "SKU_A001 언제 소진돼?", "왜 Zone A를 추천했어?", "이번 주 창고 상황 예측해줘"];
 const CHAT_EMPTY_HTML = `<div class="chat-empty" id="chat-empty">
   <div class="ce-title">무엇을 도와드릴까요?</div>
   <div class="ce-sub">오늘 할 일, 적치·피킹 추천, 재고 소진 예측, 시뮬레이션을 자연어로 물어보세요.</div>
@@ -782,20 +782,25 @@ function renderDryRun(dry) {
 }
 function renderApproval(drafts, toolResults) {
   if (!drafts || !drafts.length) return "";
-  const d = drafts[0], id = d.draft_id || "";
+  const valid = drafts.filter((d) => d && d.draft_id);
+  if (!valid.length) return "";
   const TYPE = { STK: "적치지시 생성", PCK: "피킹지시 발행", SHP: "출고확정", PO: "발주",
     ALC: "재고 할당", RPL: "재고보충", DSP: "처분" };
-  const label = TYPE[(id.split("-")[1] || "")] || "상태 변경";
-  const dry = d.dry_run || (toolResults && toolResults.dry_run) || null;
-  return `<div class="approval" data-draft="${escapeHtml(id)}">
-    <div class="ap-head">⚠ 승인이 필요한 작업 — ${label}</div>
-    <div class="ap-id">${escapeHtml(id)}</div>
-    ${renderDryRun(dry)}
-    <div class="ap-actions">
-      <button class="btn-primary ap-yes">승인</button>
-      <button class="btn-ghost ap-no">거부</button>
-      <button class="btn-ghost ap-hold">보류</button>
-    </div></div>`;
+  const single = valid.length === 1;
+  return valid.map((d) => {                        // 다건이면 SKU별 카드를 각각 렌더(개별 승인/거부/보류)
+    const id = d.draft_id || "";
+    const label = TYPE[(id.split("-")[1] || "")] || "상태 변경";
+    const dry = d.dry_run || (single && toolResults && toolResults.dry_run) || null;
+    return `<div class="approval" data-draft="${escapeHtml(id)}">
+      <div class="ap-head">⚠ 승인이 필요한 작업 — ${label}</div>
+      <div class="ap-id">${escapeHtml(id)}</div>
+      ${renderDryRun(dry)}
+      <div class="ap-actions">
+        <button class="btn-primary ap-yes">승인</button>
+        <button class="btn-ghost ap-no">거부</button>
+        <button class="btn-ghost ap-hold">보류</button>
+      </div></div>`;
+  }).join("");
 }
 function wireApproval(node, toolResults, onDone) {
   const box = node.classList && node.classList.contains("approval") ? node : node.querySelector(".approval");
@@ -826,12 +831,18 @@ function wireApproval(node, toolResults, onDone) {
 const ACTION_LABEL = { ALLOCATION: "할당", STOCKING: "적치지시", PICKING: "피킹지시",
   SHIPPING: "출고확정", REPLENISH: "재고보충", DISPOSAL: "처분", ORDER: "발주" };
 
+const AP_STATUS_LABEL = { EXECUTED: "실행 완료", REJECTED: "거부", PENDING_APPROVAL: "승인 대기" };
+
 function apDrawCard(d, pending) {
   const label = ACTION_LABEL[d.action_type] || d.action_type;
   const when = (d.executed_at || d.approved_at || d.created_at || "").replace("T", " ").slice(5, 16);
+  const arr = d.arrival || null;                    // 발주 실행건의 입고 도착여부
+  // 상태 배지: 발주 실행건은 실행 완료가 아니라 '입고 대기 / 입고 완료'로 표기(삭제 가능 시점을 알림)
+  let stTxt = AP_STATUS_LABEL[d.status] || d.status, stCls = d.status;
+  if (arr) { stTxt = arr.arrived ? "입고 완료" : "입고 대기"; stCls = arr.arrived ? "EXECUTED" : "PENDING_APPROVAL"; }
   const head = `<div class="ap-top"><span class="ap-type">${safeText(label)}</span>
     <span class="ap-target">${safeText(d.target_id || "")}</span>
-    ${pending ? "" : `<span class="ap-status ${d.status}">${safeText(d.status)}</span>`}
+    ${pending ? "" : `<span class="ap-status ${stCls}">${safeText(stTxt)}</span>`}
     <span class="ap-when">${safeText(when)}</span></div>`;
   if (pending) {
     return `<div class="ap-card approval" data-draft="${safeText(d.draft_id)}">${head}
@@ -840,7 +851,47 @@ function apDrawCard(d, pending) {
         <button class="btn-ghost ap-no">거부</button>
         <button class="btn-ghost ap-hold">보류</button></div></div>`;
   }
-  return `<div class="ap-card">${head}${renderDryRun(d.dry_run)}</div>`;
+  // 처리 내역(EXECUTED/REJECTED) — 삭제 + (발주 입고 전) 바로 보충
+  const waiting = arr && !arr.arrived;              // 발주 실행됐으나 아직 입고 전
+  const note = arr
+    ? (arr.arrived
+        ? `<div class="ap-arrival ok">✅ 입고 완료 — 재고에 반영됨. 이제 삭제할 수 있습니다.</div>`
+        : `<div class="ap-arrival">📦 입고 대기 — ${safeText(arr.inbound_no)} · 도착예정 ${safeText(arr.expected_date || "-")}. '바로 보충'을 누르면 지금 입고 처리됩니다.</div>`)
+    : "";
+  // 바로 보충: 입고 전이면 항상 활성(누르면 즉시 재고 반영). 삭제: 항상 활성(입고 전 클릭 시 안내 토스트).
+  const stockBtn = waiting
+    ? `<button class="btn-ghost ap-stock-now" data-draft="${safeText(d.draft_id)}">🔁 바로 보충</button>`
+    : "";
+  const delBtn = `<button class="btn-ghost ap-del" data-draft="${safeText(d.draft_id)}">🗑 삭제</button>`;
+  return `<div class="ap-card">${head}${renderDryRun(d.dry_run)}${note}
+    <div class="ap-actions">${stockBtn}${delBtn}</div></div>`;
+}
+
+async function apiJson(url, opts) {   // 응답 파싱 + HTTP 상태까지 반영한 에러 통일 처리
+  try {
+    const resp = await fetch(url, opts);
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) return { error: body.error || body.detail || `요청 실패 (HTTP ${resp.status})` };
+    return body;
+  } catch (e) { return { error: "요청 실패: " + String(e) }; }
+}
+
+async function deleteDraft(id) {
+  const r = await apiJson(`/drafts/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (r.error) { showToast({ kind: "error", id, message: r.error }); return; }
+  showToast({ kind: "ok", id, message: "처리 내역을 삭제했습니다." });
+  loadApproval();
+}
+
+async function stockNowDraft(id) {
+  AUTO.flash.AutoOrderAgent = Date.now(); updateAgentFlash();   // 수동 보충도 자동발주 원 점멸
+  const r = await apiJson(`/drafts/${encodeURIComponent(id)}/stock-now`, { method: "POST" });
+  if (r.error) { showToast({ kind: "error", id, message: r.error }); return; }
+  const n = (r.stocked || []).reduce((s, x) => s + (x.qty || 0), 0);
+  showToast({ kind: "ok", id, message: `가상 보충 완료 — ${escapeHtml(r.sku || "")} ${n}개 입고 반영` });
+  AUTO.flash.AutoOrderAgent = Date.now(); updateAgentFlash();
+  loadApproval();
+  loadResources().catch(() => {});   // 재고/자원 뷰 즉시 갱신
 }
 
 async function loadApproval() {
@@ -858,7 +909,93 @@ async function loadApproval() {
   $("#ap-history-list").innerHTML = history.length
     ? history.map((d) => apDrawCard(d, false)).join("")
     : `<div class="kpi-empty">처리 내역이 없습니다.</div>`;
+  $("#ap-history-list").querySelectorAll(".ap-del")
+    .forEach((b) => b.addEventListener("click", () => deleteDraft(b.dataset.draft)));
+  $("#ap-history-list").querySelectorAll(".ap-stock-now")
+    .forEach((b) => b.addEventListener("click", () => stockNowDraft(b.dataset.draft)));
 }
+
+// ---------- 오늘 할 일 우측 패널 ----------
+const TODO = { offsets: {} };
+
+function openTodoPanel() {
+  const panel = $("#todo-panel"); if (!panel) return;
+  panel.classList.remove("hidden");
+  $("#panel-chat").classList.add("chat-todo-open");
+  loadTodo();
+}
+function closeTodoPanel() {
+  $("#todo-panel").classList.add("hidden");
+  $("#panel-chat").classList.remove("chat-todo-open");
+}
+
+async function loadTodo() {
+  const body = $("#todo-body"); if (!body) return;
+  body.innerHTML = `<div class="kpi-empty">불러오는 중…</div>`;
+  const data = await fetch("/todo").then((x) => x.json()).catch(() => null);
+  if (!data || !data.buckets) { body.innerHTML = `<div class="kpi-empty">불러오지 못했습니다.</div>`; return; }
+  TODO.offsets = {};
+  body.innerHTML = data.buckets.map(todoBucketHtml).join("");
+}
+function todoBucketHtml(b) {
+  TODO.offsets[b.key] = b.items.length;
+  const items = b.items.map((it) => todoItemHtml(b.key, it)).join("") || `<div class="kpi-empty">없음</div>`;
+  const more = b.has_more ? `<button class="todo-more" data-bucket="${b.key}">더보기 (전체 ${b.count}건)</button>` : "";
+  return `<div class="todo-bucket" data-bucket="${b.key}">
+    <div class="todo-bucket-head"><span>${escapeHtml(b.label)}</span><span class="cnt">${b.count}건</span></div>
+    <div class="todo-items">${items}</div>${more}</div>`;
+}
+function todoItemHtml(bucket, it) {
+  return `<div class="todo-item" data-bucket="${bucket}" data-id="${escapeHtml(String(it.id))}">
+    <div class="ti-title">${escapeHtml(String(it.title))}</div>
+    <div class="ti-sub">${escapeHtml(it.sub || "")}</div>
+    <div class="todo-actions">
+      <button class="t-yes">승인</button>
+      <button class="t-no">거절</button>
+      <button class="t-hold">보류</button>
+    </div></div>`;
+}
+
+async function todoAct(card, decision) {
+  const bucket = card.dataset.bucket, id = card.dataset.id;
+  card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const r = await apiJson("/todo/act", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bucket, target_id: id, decision }) });
+  if (r.error) {
+    showToast({ kind: "error", id, message: r.error });
+    card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    return;
+  }
+  card.classList.add("done");
+  if (decision === "approve") {
+    showToast({ kind: "ok", id, message: "승인·실행 완료" });
+    card.querySelector(".todo-actions").innerHTML = `<span class="ti-sub">✓ 승인·실행됨</span>`;
+  } else {
+    showToast({ kind: "ok", id, message: "보류 — Approval 탭 대기" });
+    card.querySelector(".todo-actions").innerHTML = `<span class="ti-sub">⏸ 보류(Approval 대기)</span>`;
+  }
+}
+
+async function loadMoreTodo(btn) {
+  const bucket = btn.dataset.bucket, offset = TODO.offsets[bucket] || 0;
+  const r = await fetch(`/todo/${bucket}?offset=${offset}&limit=20`).then((x) => x.json()).catch(() => null);
+  if (!r || !r.items) return;
+  const itemsEl = btn.closest(".todo-bucket").querySelector(".todo-items");
+  itemsEl.insertAdjacentHTML("beforeend", r.items.map((it) => todoItemHtml(bucket, it)).join(""));
+  TODO.offsets[bucket] = offset + r.items.length;
+  if (!r.has_more) btn.remove();
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#todo-close")) return closeTodoPanel();
+  const more = e.target.closest(".todo-more");
+  if (more) return loadMoreTodo(more);
+  const btn = e.target.closest("#todo-body .t-yes, #todo-body .t-no, #todo-body .t-hold");
+  if (!btn) return;
+  const card = btn.closest(".todo-item");
+  if (btn.classList.contains("t-no")) { card.remove(); return; }   // 거절: 목록에서 제외
+  todoAct(card, btn.classList.contains("t-yes") ? "approve" : "hold");
+});
 
 // ---------- AI 관측(trace) 탭 ----------
 let TRACE = { runId: null, items: [] };
@@ -988,7 +1125,8 @@ function handleChatEvent(ev, ui) {
     ui.finalEl.innerHTML = escapeHtml(ev.response || "(응답이 비어 있습니다)").replace(/\n/g, "<br>")
       + renderSources(ev.rag_sources)
       + (ev.approval_required ? renderApproval(ev.draft_actions, ev.tool_results) : "");
-    if (ev.approval_required) wireApproval(ui.node, ev.tool_results);
+    if (ev.approval_required) ui.node.querySelectorAll(".approval").forEach((box) => wireApproval(box, ev.tool_results));
+    if (ev.intent === "daily_summary") openTodoPanel();   // 오늘 할 일 → 우측 할일 패널 자동 오픈
     if (ctx.steps && ev.tokens) {
       const t = ev.tokens, row = document.createElement("div");
       row.className = "tok-total";
@@ -1084,7 +1222,7 @@ let LIVE = { running: false, es: null };
 function showToast(ev) {
   const wrap = $("#toast-wrap"); if (!wrap) return;
   const kind = ev.kind || "outbound";
-  const tag = kind === "inbound" ? "입고" : kind === "outbound" ? "출고" : "오류";
+  const tag = { inbound: "입고", outbound: "출고", ok: "완료", error: "오류" }[kind] || "알림";
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
   el.innerHTML = `<div class="t-head"><span class="t-tag">${tag}</span>${ev.id ? safeText(ev.id) : "실시간"}<span class="t-time">${safeText(ev.ts || "")}</span></div>

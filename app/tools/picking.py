@@ -48,9 +48,12 @@ def recommend_picking(current_datetime: str, risk_levels: dict | None = None) ->
         est = ct["estimated_minutes"]
         due = datetime.strptime(o["due_datetime"], _FMT)
         mins_left = (due - now).total_seconds() / 60
-        rec_start = due - timedelta(minutes=est + BUFFER_MINUTES)
-        urgent = rec_start <= now
-        deadline_urgency = 120 if urgent else max(0, 120 - mins_left)
+        raw_start = due - timedelta(minutes=est + BUFFER_MINUTES)   # 마감 역산(작업+버퍼)
+        rec_start = max(now, raw_start)          # 착수 데드라인이 지났으면 '지금'이 권장 시작
+        start_now = raw_start <= now             # 지금 즉시 착수해야 하는 건(과거 시각 노출 방지)
+        overdue = due < now                      # 마감 자체가 이미 지남
+        urgent = start_now
+        deadline_urgency = 120 if start_now else max(0, 120 - mins_left)
         customer = o["customer_priority"] * 10
         skus = [l["sku"] for l in _order_lines(o["order_no"])]
         shortage = 0
@@ -64,6 +67,9 @@ def recommend_picking(current_datetime: str, risk_levels: dict | None = None) ->
                  - est * 0.5 - ct["max_distance"] * 0.2)
         recs.append({"order_no": o["order_no"], "priority_score": round(score, 2),
                      "recommended_start_time": rec_start.strftime(_FMT),
+                     "start_now": start_now, "overdue": overdue,
+                     "minutes_overdue": round(max(0.0, -mins_left)),
+                     "start_guidance": "즉시 시작(마감 지남)" if start_now else f"{rec_start.strftime('%H:%M')}까지 착수",
                      "estimated_minutes": est, "urgent": urgent,
                      "due_datetime": o["due_datetime"]})
     recs.sort(key=lambda r: r["priority_score"], reverse=True)

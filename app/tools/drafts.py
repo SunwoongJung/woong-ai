@@ -42,41 +42,6 @@ def create_stocking_task_draft(inbound_no: str, location_id: str) -> dict:
     return {"draft_id": did, "status": "PENDING_APPROVAL"}
 
 
-def create_allocation_draft(order_no: str) -> dict:
-    if not q("SELECT 1 FROM outbound_orders WHERE order_no=?", (order_no,)):
-        return {"error": "주문번호 없음"}
-    did = _draft_id("ALC")
-    conn = get_connection()
-    try:
-        conn.execute("INSERT INTO action_drafts(draft_id,action_type,target_id,payload_json,status)"
-                     " VALUES(?,?,?,?,?)",
-                     (did, "ALLOCATION", order_no,
-                      json.dumps({"order_no": order_no}, ensure_ascii=False), "PENDING_APPROVAL"))
-        conn.commit()
-    finally:
-        conn.close()
-    dry = dry_run_action(did)  # 생성 시 Dry Run 자동 수행(결품 경고 포함)
-    return {"draft_id": did, "dry_run": dry, "status": "PENDING_APPROVAL"}
-
-
-def create_replenishment_draft(sku: str) -> dict:
-    rec = next((r for r in replenishment.scan_replenishment()["recommendations"] if r["sku"] == sku), None)
-    if not rec:
-        return {"error": f"{sku} 보충 대상 아님(피킹면 충분하거나 보관 재고 없음)"}
-    payload = {"sku": sku, "from_location": rec["from_location"],
-               "to_location": rec["pick_location"], "qty": rec["recommend_qty"]}
-    did = _draft_id("RPL")
-    conn = get_connection()
-    try:
-        conn.execute("INSERT INTO action_drafts(draft_id,action_type,target_id,payload_json,status)"
-                     " VALUES(?,?,?,?,?)",
-                     (did, "REPLENISH", sku, json.dumps(payload, ensure_ascii=False), "PENDING_APPROVAL"))
-        conn.commit()
-    finally:
-        conn.close()
-    return {"draft_id": did, "dry_run": dry_run_action(did), "status": "PENDING_APPROVAL"}
-
-
 def create_purchase_order_draft(sku: str, qty) -> dict:
     """발주(구매 입고) Draft — 승인 시 inbound_orders에 입고 발주 생성. 도착=오늘+리드타임."""
     from datetime import date, timedelta
@@ -98,21 +63,6 @@ def create_purchase_order_draft(sku: str, qty) -> dict:
         conn.execute("INSERT INTO action_drafts(draft_id,action_type,target_id,payload_json,status)"
                      " VALUES(?,?,?,?,?)",
                      (did, "ORDER", sku, json.dumps(payload, ensure_ascii=False), "PENDING_APPROVAL"))
-        conn.commit()
-    finally:
-        conn.close()
-    return {"draft_id": did, "dry_run": dry_run_action(did), "status": "PENDING_APPROVAL"}
-
-
-def create_disposal_draft(sku: str) -> dict:
-    if not q("SELECT 1 FROM products WHERE sku=?", (sku,)):
-        return {"error": "SKU 없음"}
-    did = _draft_id("DSP")
-    conn = get_connection()
-    try:
-        conn.execute("INSERT INTO action_drafts(draft_id,action_type,target_id,payload_json,status)"
-                     " VALUES(?,?,?,?,?)",
-                     (did, "DISPOSAL", sku, json.dumps({"sku": sku}, ensure_ascii=False), "PENDING_APPROVAL"))
         conn.commit()
     finally:
         conn.close()
@@ -152,6 +102,66 @@ def create_shipping_confirm_draft(order_no: str) -> dict:
     return {"draft_id": did, "dry_run": dry, "status": "PENDING_APPROVAL"}
 
 
+# ---------- 발주 실행 내역: 입고 도착여부 / 삭제 / 바로 보충 ----------
+def order_arrival(draft: dict) -> dict | None:
+    """ORDER 실행(EXECUTED) Draft가 만든 입고건의 도착 여부. 링크(payload.inbound_no) 우선, 없으면 근사 매칭.
+
+    반환: {inbound_no, inbound_status, arrived} 또는 None(대상 아님). arrived=True면 이미 STOCKED(입고완료)."""
+    if draft.get("action_type") != "ORDER" or draft.get("status") != "EXECUTED":
+        return None
+    raw = draft.get("payload_json")
+    p = json.loads(raw) if isinstance(raw, str) else (draft.get("payload") or {})
+    row = None
+    if p.get("inbound_no"):
+        r = q("SELECT inbound_no, status, expected_date FROM inbound_orders WHERE inbound_no=?",
+              (p["inbound_no"],))
+        row = r[0] if r else None
+    if not row:   # 구버전(링크 미저장) — sku·수량·도착예정으로 근사 매칭
+        r = q("""SELECT inbound_no, status, expected_date FROM inbound_orders
+                 WHERE sku=? AND qty=? AND expected_date=? AND supplier='PO'
+                 ORDER BY inbound_no DESC LIMIT 1""",
+              (p.get("sku"), p.get("qty"), p.get("expected_date")))
+        row = r[0] if r else None
+    if not row:
+        return None
+    return {"inbound_no": row["inbound_no"], "inbound_status": row["status"],
+            "expected_date": row["expected_date"], "arrived": row["status"] == "STOCKED"}
+
+
+def delete_draft(draft_id: str) -> dict:
+    """처리 완료(EXECUTED/REJECTED) 내역 삭제. 단, 발주 후 아직 입고 전(STOCKED 아님)이면 삭제 불가."""
+    d = _get_draft(draft_id)
+    if not d:
+        return {"error": "draft 없음"}
+    if d["status"] not in ("EXECUTED", "REJECTED"):
+        return {"error": "처리 완료된 내역만 삭제할 수 있습니다"}
+    arr = order_arrival(d)
+    if arr and not arr["arrived"]:
+        return {"error": f"발주 입고가 완료되어야 삭제할 수 있습니다 (입고 {arr['inbound_no']}, 도착예정 "
+                         f"{arr['expected_date']}). 지금 처리하려면 '바로 보충'을 누르세요."}
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM action_drafts WHERE draft_id=?", (draft_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "DELETED", "draft_id": draft_id}
+
+
+def stock_now_draft(draft_id: str) -> dict:
+    """'바로 보충' — 발주 실행 내역의 입고 전 건을 가상 즉시 입고·재고 반영(자동운영과 동일 효과)."""
+    d = _get_draft(draft_id)
+    if not d:
+        return {"error": "draft 없음"}
+    arr = order_arrival(d)
+    if not arr:
+        return {"error": "즉시 보충할 발주 입고 건이 없습니다"}
+    if arr["arrived"]:
+        return {"error": "이미 입고 완료된 건입니다"}
+    from bb import backorder
+    return backorder.stock_inbound_now(arr["inbound_no"])
+
+
 # ---------- Dry Run ----------
 def dry_run_action(draft_id: str) -> dict:
     d = _get_draft(draft_id)
@@ -170,25 +180,6 @@ def dry_run_action(draft_id: str) -> dict:
         if loc and (loc[0]["capacity"] - loc[0]["occupied_qty"]) < payload["qty"]:
             warnings.append("잔여용량 부족 — CAPA 확인 필요")
 
-    elif d["action_type"] == "ALLOCATION":
-        o = q("SELECT status FROM outbound_orders WHERE order_no=?", (payload["order_no"],))
-        calc = allocation.calculate_allocation(payload["order_no"])
-        changes.append({"table": "outbound_orders", "field": "status",
-                        "before": o[0]["status"] if o else None, "after": "ALLOCATED"})
-        for ln in calc.get("lines", []):
-            changes.append({"table": "outbound_order_lines", "sku": ln["sku"],
-                            "field": "allocated_qty", "after": ln["allocatable"]})
-            if ln["shortage"] > 0:
-                warnings.append(f"{ln['sku']} 결품 {ln['shortage']} (요청 {ln['requested']} > 가용 {ln['available']})")
-
-    elif d["action_type"] == "REPLENISH":
-        changes.append({"table": "inventory", "sku": payload["sku"], "qty_change": -payload["qty"],
-                        "location": payload["from_location"]})
-        changes.append({"table": "inventory", "sku": payload["sku"], "qty_change": payload["qty"],
-                        "location": payload["to_location"]})
-        if payload["qty"] <= 0:
-            warnings.append("보충 수량 0 — 보관 재고 확인 필요")
-
     elif d["action_type"] == "ORDER":
         avail = q("SELECT COALESCE(SUM(qty),0) s FROM inventory WHERE sku=? AND status='AVAILABLE'",
                   (payload["sku"],))[0]["s"]
@@ -196,13 +187,6 @@ def dry_run_action(draft_id: str) -> dict:
                         "after": f"{payload['sku']} {payload['qty']}개, 도착예정 {payload['expected_date']}"
                                  f"(리드타임 {payload['lead_time_days']}일)"})
         changes.append({"table": "재고 반영", "note": "도착·적치 완료 시 가용재고 증가", "현재_가용": avail})
-
-    elif d["action_type"] == "DISPOSAL":
-        stock = q("SELECT COALESCE(SUM(qty),0) s FROM inventory WHERE sku=? AND status='AVAILABLE'",
-                  (payload["sku"],))[0]["s"]
-        changes.append({"table": "inventory", "sku": payload["sku"], "field": "status",
-                        "before": "AVAILABLE", "after": "HOLD", "qty": stock})
-        warnings.append(f"{payload['sku']} 가용재고 {stock} 보류(HOLD) 처리 — 출고 풀에서 제외")
 
     elif d["action_type"] == "PICKING":
         o = q("SELECT status FROM outbound_orders WHERE order_no=?", (payload["order_no"],))
@@ -252,9 +236,7 @@ def approve_action(draft_id: str, approved: bool, user_id: str) -> dict:
         conn.close()
 
     dispatch = {"STOCKING": issue_stocking_task, "PICKING": issue_picking_instruction,
-                "SHIPPING": confirm_shipping, "ALLOCATION": issue_allocation,
-                "REPLENISH": issue_replenishment, "DISPOSAL": issue_disposal,
-                "ORDER": issue_purchase_order}
+                "SHIPPING": confirm_shipping, "ORDER": issue_purchase_order}
     executed = dispatch[d["action_type"]](draft_id)
 
     conn = get_connection()
@@ -268,18 +250,6 @@ def approve_action(draft_id: str, approved: bool, user_id: str) -> dict:
 
 
 # ---------- 실행 Tool (승인된 Draft만 호출됨) ----------
-def issue_allocation(draft_id: str) -> dict:
-    d = _get_draft(draft_id)
-    payload = json.loads(d["payload_json"])
-    return allocation.apply_allocation(payload["order_no"])
-
-
-def issue_replenishment(draft_id: str) -> dict:
-    d = _get_draft(draft_id)
-    p = json.loads(d["payload_json"])
-    return replenishment.execute_replenishment(p["sku"], p["from_location"], p["to_location"], p["qty"])
-
-
 def issue_purchase_order(draft_id: str) -> dict:
     d = _get_draft(draft_id)
     p = json.loads(d["payload_json"])
@@ -289,24 +259,14 @@ def issue_purchase_order(draft_id: str) -> dict:
         conn.execute("INSERT INTO inbound_orders(inbound_no,sku,qty,expected_date,status,supplier)"
                      " VALUES(?,?,?,?,?,?)",
                      (inbound_no, p["sku"], p["qty"], p["expected_date"], "PLANNED", "PO"))
+        p["inbound_no"] = inbound_no   # 링크 저장 — 도착여부 확인·'바로 보충'·삭제가드에 사용
+        conn.execute("UPDATE action_drafts SET payload_json=? WHERE draft_id=?",
+                     (json.dumps(p, ensure_ascii=False), draft_id))
         conn.commit()
     finally:
         conn.close()
     return {"inbound_no": inbound_no, "sku": p["sku"], "qty": p["qty"],
             "expected_date": p["expected_date"], "status": "PLANNED"}
-
-
-def issue_disposal(draft_id: str) -> dict:
-    d = _get_draft(draft_id)
-    sku = json.loads(d["payload_json"])["sku"]
-    conn = get_connection()
-    try:
-        cur = conn.execute("UPDATE inventory SET status='HOLD' WHERE sku=? AND status='AVAILABLE'", (sku,))
-        conn.commit()
-        held = cur.rowcount
-    finally:
-        conn.close()
-    return {"sku": sku, "held_lots": held, "status": "HOLD"}
 
 
 def issue_stocking_task(draft_id: str) -> dict:
@@ -323,29 +283,35 @@ def issue_stocking_task(draft_id: str) -> dict:
         conn.commit()
     finally:
         conn.close()
-    return {"stocking_task_id": task_id, "inbound_status": "STOCKING_TASK_CREATED"}
+    repl = replenishment.execute_for_sku(payload["sku"])   # 적치지시 시 해당 SKU 피킹면 자동 보충(승인 불필요)
+    return {"stocking_task_id": task_id, "inbound_status": "STOCKING_TASK_CREATED", "auto_replenishment": repl}
 
 
 def issue_picking_instruction(draft_id: str) -> dict:
     d = _get_draft(draft_id)
     payload = json.loads(d["payload_json"])
-    ct = calculate_picking_required_time(payload["order_no"])
+    order_no = payload["order_no"]
+    alloc = allocation.apply_allocation(order_no)   # 피킹지시 시 재고 할당 자동 수행(승인 불필요·꼬임방지)
+    ct = calculate_picking_required_time(order_no)
     task_id = f"PCK-{uuid.uuid4().hex[:6]}"
     conn = get_connection()
     try:
-        conn.execute("INSERT INTO picking_tasks(picking_task_id,order_no,estimated_minutes,status,draft_id)"
-                     " VALUES(?,?,?,?,?)",
-                     (task_id, payload["order_no"], ct["estimated_minutes"], "ISSUED", draft_id))
-        conn.execute("UPDATE outbound_orders SET status='PICKING_ISSUED' WHERE order_no=?",
-                     (payload["order_no"],))
-        # 할당량을 피킹 수량으로 이월(미할당 주문은 요청량 기준)
+        # HITL 피킹지시는 피킹 완료로 간주(작업 시뮬레이션 없음) → 태스크 완료 + 출고확정 대기 큐 진입
+        conn.execute("INSERT INTO picking_tasks(picking_task_id,order_no,estimated_minutes,status,draft_id,completed_at)"
+                     " VALUES(?,?,?,?,?,?)",
+                     (task_id, order_no, ct["estimated_minutes"], "COMPLETED", draft_id, _NOW()))
         conn.execute("""UPDATE outbound_order_lines
                         SET picked_qty=CASE WHEN allocated_qty>0 THEN allocated_qty ELSE qty END,
-                            line_status='PICKED' WHERE order_no=?""", (payload["order_no"],))
+                            line_status='PICKED' WHERE order_no=?""", (order_no,))
+        conn.execute("UPDATE outbound_orders SET status='SHIPPING_PENDING' WHERE order_no=?", (order_no,))
+        if not conn.execute("SELECT 1 FROM shipping_pending WHERE order_no=? AND status='PENDING'",
+                            (order_no,)).fetchone():   # 출고확정 대기 큐 등록(중복 방지)
+            conn.execute("INSERT INTO shipping_pending(order_no,ready_datetime,status) VALUES(?,?,'PENDING')",
+                         (order_no, _NOW()))
         conn.commit()
     finally:
         conn.close()
-    return {"picking_task_id": task_id, "order_status": "PICKING_ISSUED"}
+    return {"picking_task_id": task_id, "order_status": "SHIPPING_PENDING", "auto_allocation": alloc}
 
 
 def confirm_shipping(draft_id: str) -> dict:

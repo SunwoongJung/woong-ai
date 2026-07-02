@@ -88,14 +88,17 @@ def retrieve(query: str, intent: str | None = None, k: int = 5) -> dict:
     abstain = not judge["answerable"]
     if abstain:
         trace_store.emit(node="RAG Retriever", kind="abstain")
+    # KPI 조회/개선은 값이 Tool에서 오고 문서는 보조 근거(기준·SOP)이므로 abstain이어도 근거를 유지한다.
+    keep_on_abstain = intent in ("kpi_query", "kpi_advice")
+    evidence = [] if (abstain and not keep_on_abstain) else [
+        {"source": e["source"], "section": e["section"], "evidence_span": e["evidence_span"],
+         "relevance": round(e["relevance"], 3), "contribution": round(e["contribution"], 3)}
+        for e in ranked[:3]]
     return {
         "answerable": judge["answerable"],
         "abstain": abstain,
         "sufficiency": judge,
         "retries": retries,
-        "evidence": [] if abstain else [
-            {"source": e["source"], "section": e["section"], "evidence_span": e["evidence_span"],
-             "relevance": round(e["relevance"], 3), "contribution": round(e["contribution"], 3)}
-            for e in ranked[:3]],
+        "evidence": evidence,
         "abstain_message": "문서 근거가 부족합니다." if abstain else None,
     }

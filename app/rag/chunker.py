@@ -16,6 +16,7 @@ FILE_META = {
     "warehouse_operation_sop.md": ("sop", "common", ["risk_response_recommendation", "policy_question"]),
     "scoring_formula.md": ("formula", "common", ["policy_question"]),
     "wms_terms.md": ("glossary", "common", ["policy_question"]),
+    "kpi_policy.md": ("policy", "kpi", ["kpi_query", "kpi_advice", "policy_question"]),
 }
 
 # 헤딩 부분문자열 → section id (docs/03 §5)

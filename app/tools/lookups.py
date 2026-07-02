@@ -1,4 +1,6 @@
 """조회 Tool (docs/06 §4) + 운영 KPI 조회 (docs/13 §4)."""
+import re
+
 from tools.common import q
 
 
@@ -45,22 +47,53 @@ def lookup_demand_history(sku: str, days: int = 60) -> dict:
     return {"history": rows, "days_available": len(rows)}
 
 
-def query_operation_kpis(kpis: list[str], target_date: str | None = None) -> dict:
-    """운영 KPI 조회. forecast 의존 KPI(on_time_shipping_rate, high_risk_sku_count)는
-    Phase 4(Forecast/DES)에서 보강한다. 현재는 DB로 계산 가능한 KPI를 반환."""
+def _resolve_zone(hint) -> str | None:
+    """'A'·'zone a'·'ZONE_A'·'A존' 등을 실제 zone_id로 정규화(없으면 None)."""
+    if not hint:
+        return None
+    s = str(hint).upper()
+    m = (re.search(r"(?:ZONE|존)\s*[_\- ]?\s*([A-Z])", s)
+         or re.search(r"\b([A-Z])\s*존", s) or re.search(r"^\s*([A-Z])\s*$", s))
+    if not m:
+        return None
+    zid = "ZONE_" + m.group(1)
+    return zid if q("SELECT 1 FROM zones WHERE zone_id=?", (zid,)) else None
+
+
+def query_operation_kpis(kpis: list[str], target_date: str | None = None, zone_id: str | None = None) -> dict:
+    """운영 KPI 조회. Zone 점유율은 KPI 대시보드와 동일한 실재고 기준으로 계산한다.
+    zone_id 지정 시 해당 존만 반환. forecast 의존 KPI는 Phase 4에서 보강."""
+    from tools import kpi_dashboard
+    zid = _resolve_zone(zone_id)
     out = []
     for name in kpis:
         if name == "zone_occupancy":
-            rows = q("""SELECT z.zone_id, ROUND(COALESCE(SUM(l.occupied_qty),0)*1.0/z.max_capacity,3) AS occupancy
-                        FROM zones z LEFT JOIN locations l ON l.zone_id=z.zone_id
-                        GROUP BY z.zone_id ORDER BY z.zone_id""")
-            out.append({"name": name, "value": rows, "unit": "percent"})
+            zones = kpi_dashboard.zone_occupancy()          # 실제 가용재고 기준(대시보드 동일 소스)
+            if zid:
+                zones = [z for z in zones if z["zone_id"] == zid]
+            note = (f"{zone_id} 존을 찾지 못했습니다" if (zone_id and not zid) else None)
+            out.append({"name": name, "value": zones, "unit": "percent", "note": note})
         elif name == "saturated_zone_count":
-            n = q("""SELECT COUNT(*) n FROM (SELECT z.zone_id,
-                       COALESCE(SUM(l.occupied_qty),0)*1.0/z.max_capacity AS r
-                       FROM zones z LEFT JOIN locations l ON l.zone_id=z.zone_id
-                       GROUP BY z.zone_id) WHERE r > 0.9""")[0]["n"]
+            n = len([z for z in kpi_dashboard.zone_occupancy() if (z["occupancy"] or 0) > 0.9])
             out.append({"name": name, "value": n, "unit": "count"})
+        elif name == "team_utilization":
+            out.append({"name": name, "value": kpi_dashboard.team_utilization_current(), "unit": "percent"})
+        elif name == "inventory_value":
+            out.append({"name": name, "value": round(kpi_dashboard.inventory_value()), "unit": "krw"})
+        elif name == "picking_wait":
+            out.append({"name": name, "value": kpi_dashboard.picking_wait()["avg_seconds"], "unit": "seconds"})
+        elif name == "zone_over_target_count":
+            out.append({"name": name, "value": len(kpi_dashboard.zones_over_target(0.80)), "unit": "count"})
+        elif name == "stockout_within_week_count":
+            out.append({"name": name, "value": kpi_dashboard.stockout_analysis()["within_week_count"], "unit": "count"})
+        elif name == "out_of_stock_count":
+            out.append({"name": name, "value": kpi_dashboard.stockout_analysis()["out_of_stock_count"], "unit": "count"})
+        elif name == "shipping_delay_count":
+            out.append({"name": name, "value": kpi_dashboard.shipping_delay_count(kpi_dashboard.reference_date()),
+                        "unit": "count"})
+        elif name == "putaway_delay_count":
+            out.append({"name": name, "value": kpi_dashboard.putaway_delay_count(kpi_dashboard.reference_date()),
+                        "unit": "count"})
         elif name == "safety_stock_below_count":
             n = q("""SELECT COUNT(*) n FROM (SELECT p.sku, p.safety_stock,
                        COALESCE((SELECT SUM(qty) FROM inventory i WHERE i.sku=p.sku),0) AS stock

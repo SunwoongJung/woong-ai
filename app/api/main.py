@@ -132,6 +132,12 @@ class ApproveReq(BaseModel):
     user_id: str = "operator01"
 
 
+class TodoActReq(BaseModel):
+    bucket: str
+    target_id: str
+    decision: str = "approve"   # approve(즉시 실행) | hold(Approval 탭 대기)
+
+
 # ---------- 엔드포인트 ----------
 @app.get("/health")
 def health():
@@ -454,19 +460,18 @@ def picking_draft(r: OrderDraftReq):
     return drafts.create_picking_instruction_draft(r.order_no)
 
 
-@app.post("/allocation/draft")
-def allocation_draft(r: OrderDraftReq):
-    return drafts.create_allocation_draft(r.order_no)
+@app.post("/allocation/apply")
+def allocation_apply(r: OrderDraftReq):
+    """재고 할당 즉시 실행(승인 불필요 — 피킹지시 시 자동으로도 수행)."""
+    from tools import allocation
+    return allocation.apply_allocation(r.order_no)
 
 
-@app.post("/replenishment/draft")
-def replenishment_draft(r: SkuReq):
-    return drafts.create_replenishment_draft(r.sku)
-
-
-@app.post("/disposal/draft")
-def disposal_draft(r: SkuReq):
-    return drafts.create_disposal_draft(r.sku)
+@app.post("/replenishment/apply")
+def replenishment_apply(r: SkuReq):
+    """피킹면 보충 즉시 실행(승인 불필요 — 적치지시 시 자동으로도 수행)."""
+    from tools import replenishment
+    return replenishment.execute_for_sku(r.sku)
 
 
 @app.post("/shipping/draft")
@@ -490,12 +495,46 @@ def list_drafts(status: str | None = None, limit: int = 60):
         r["payload"] = json.loads(r.pop("payload_json")) if r.get("payload_json") else {}
         dr = r.pop("dry_run_result_json")
         r["dry_run"] = json.loads(dr) if dr else None
+        r["arrival"] = drafts.order_arrival({**r, "payload": r["payload"]})  # 발주 입고 도착여부(삭제/바로보충 판단)
     return {"drafts": rows}
 
 
 @app.post("/approve")
 def approve(r: ApproveReq):
     return drafts.approve_action(r.draft_id, r.approved, r.user_id)
+
+
+@app.get("/todo")
+def todo_overview():
+    """오늘 할 일 4개 대기 버킷(버킷별 상위 10건 + 총건수) — 채팅 우측 할일 패널용."""
+    from tools import todo
+    return todo.overview(limit=10)
+
+
+@app.get("/todo/{bucket}")
+def todo_more(bucket: str, offset: int = 0, limit: int = 20):
+    """버킷 '더보기' — offset부터 limit건 추가."""
+    from tools import todo
+    return todo.more(bucket, offset, limit)
+
+
+@app.post("/todo/act")
+def todo_act(r: TodoActReq):
+    """할일 항목 처리 — approve(즉시 실행) | hold(Approval 탭 대기)."""
+    from tools import todo
+    return todo.act(r.bucket, r.target_id, r.decision)
+
+
+@app.delete("/drafts/{draft_id}")
+def delete_draft(draft_id: str):
+    """처리 완료 내역 삭제(입고 전 발주는 삭제 불가)."""
+    return drafts.delete_draft(draft_id)
+
+
+@app.post("/drafts/{draft_id}/stock-now")
+def stock_now_draft(draft_id: str):
+    """'바로 보충' — 발주 실행 내역의 입고 전 건을 즉시 입고·재고 반영(수량 즉시 증가)."""
+    return drafts.stock_now_draft(draft_id)
 
 
 @app.get("/events")
