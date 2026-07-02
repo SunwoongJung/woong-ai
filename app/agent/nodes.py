@@ -33,8 +33,9 @@ def router_node(state: dict) -> dict:
     system = (
         "당신은 WMS 운영 조수의 라우터입니다. 사용자 질의의 intent와 파라미터를 추출해 JSON으로만 답하세요.\n"
         "intent 정의:\n"
-        "- policy_question: 추천/판단의 '이유·근거·정책·산식'을 묻는 질문. 예: \"왜 Zone A야?\", "
-        "\"왜 ORD001이 1순위야?\", \"소진일은 어떻게 계산해?\"\n"
+        "- policy_question: 창고 운영 '정책·규칙·SOP·산식'의 근거를 묻는 질문. 예: \"왜 Zone A야?\", "
+        "\"왜 ORD001이 1순위야?\", \"소진일은 어떻게 계산해?\". "
+        "단, 직전 답변에 나온 값·항목·용어의 '의미'를 되묻는 것은 policy_question이 아니라 smalltalk이다.\n"
         "- stocking_recommendation: 특정 입고건 적치 위치 추천. 예: \"INB003 적치 추천해줘\"\n"
         "- picking_recommendation: 피킹 순서/우선순위 추천. 예: \"오늘 피킹 순서 알려줘\"\n"
         "- inventory_risk: 특정 SKU 소진/위험. 예: \"SKU_A001 언제 소진돼?\"\n"
@@ -49,8 +50,15 @@ def router_node(state: dict) -> dict:
         "\"피킹만\"→scope=picking, \"재고위험만\"→scope=risk. 영역 한정이 없으면 scope=all.\n"
         "- inbound_query / outbound_query / shipping_pending_query: 데이터 '목록'을 그대로 보여달라는 단순 조회"
         "(\"입고예정 보여줘\"). '요약/정리/업무'는 조회가 아니라 daily_summary(scope)로 분류한다.\n"
-        "- allocation_query: 출고 주문 할당 현황·결품(예상 결품) 조회. 예: \"결품 위험 주문 알려줘\", "
+        "- allocation_query: 고객 출고주문의 할당 현황·결품(주문=고객 출고주문). 예: \"결품 위험 주문 알려줘\", "
         "\"오늘 출고 할당 현황\", \"재고 모자란 주문 있어?\"\n"
+        "- order_quantity_query: 부족/위험 SKU를 채우기 위한 '필요 발주량·주문량·보충 수량'(주문=발주/구매를 뜻함). "
+        "예: \"위험 SKU 필요 주문량 얼마야\", \"얼마나 발주해야 해\", \"SKU별 보충 필요 수량\", \"주문할 물량\". "
+        "'주문'이 고객 출고주문 할당이면 allocation_query, 재고를 채우는 발주량이면 order_quantity_query.\n"
+        "- order_create: 특정 SKU를 지정 수량만큼 실제로 발주/주문(상태변경 실행). 예: \"SKU_G045 100개 발주해\", "
+        "\"SKU_A001 500개 주문해\", \"그거 200개 발주 넣어줘\". parameters.sku 와 parameters.qty(정수)를 채운다. "
+        "수량 없이 '얼마나 주문해야 해'만 물으면 order_quantity_query(조회)이고, 수량을 지정해 '발주/주문해'라고 "
+        "지시하면 order_create(실행).\n"
         "- allocation_create: 특정 출고 주문에 재고를 할당(상태변경). 예: \"ORD005 할당해줘\"\n"
         "- dead_stock_query: 체화재고(저회전·장기 미출고·유통기한 임박) 조회. 예: \"체화재고 보여줘\", "
         "\"안 나가는 재고 뭐 있어?\", \"유통기한 임박 재고\"\n"
@@ -61,15 +69,18 @@ def router_node(state: dict) -> dict:
         "- stocking_task_create / picking_instruction_create / shipping_confirm: 지시 생성·출고확정(상태변경)\n"
         "- risk_response_recommendation: \"부족하면 어떻게 대응?\" SOP 대응\n"
         "- smalltalk: 인사·잡담·자기소개·이름 등 개인정보 진술/질문, '기억해둬'·'방금 뭐라고 했어' 같은 "
-        "대화·세션 기억 관련. 예: \"안녕 내 이름은 정선웅이야\", \"내 이름 뭐야?\", "
+        "대화·세션 기억 관련. 또한 직전 답변에 나온 값·항목·용어의 의미를 되묻는 질문(예: \"집중일이 뭐야\", "
+        "\"그 날짜 뭐야\", \"방금 그 수치 무슨 뜻이야\", \"거기서 urgent가 뭐야\")도 smalltalk으로 분류하고 "
+        "이전 대화 맥락으로 설명한다. 예: \"안녕 내 이름은 정선웅이야\", \"내 이름 뭐야?\", "
         "\"1번 오더 초긴급이야 기억해둬\", \"고마워\"\n"
         "- out_of_scope: WMS·창고 운영과 전혀 무관한 일반 지식/시사/날씨 등 사실 질문(예: \"오늘 날씨\"). "
         "단, 사용자 이름·개인정보·이전 발화 기억 요청은 out_of_scope가 아니라 smalltalk이다.\n"
         "규칙: 질의에 '왜', '이유', '어떻게 계산'이 있으면 policy_question 을 우선한다. "
+        "단, '뭐야/무슨 뜻이야'처럼 직전 답변·데이터 항목의 의미를 되묻는 것은 policy_question이 아니라 smalltalk이다. "
         "인사·감사·이름·기억 요청은 smalltalk(업무 목록을 나열하지 말 것).\n"
         "이전 대화가 제공되면 대명사·생략(그 주문, 거기, 그거 등)을 직전 맥락으로 해소해 "
         "parameters(order_no·sku 등)를 채운다.\n"
-        "parameters 키(있을 때만): sku, inbound_no, order_no, location_id, zone_id, target_date, kpis, scenario, scope.\n"
+        "parameters 키(있을 때만): sku, inbound_no, order_no, location_id, zone_id, target_date, kpis, scenario, scope, qty.\n"
         '형식: {"intent":..,"confidence":0~1,"parameters":{..}}'
     )
     hist = state.get("history") or []
@@ -107,16 +118,18 @@ def _h_daily_summary(p):
                        key=lambda o: (o.get("expected_date") or "", o.get("inbound_no") or ""))
         out["stocking_summary"] = summ
         out["stocking_wait_total"] = summ["total_count"]
-        out["stocking_wait"] = waits[:20]        # 상세는 오래된 순 상위 20건 샘플
-        if len(waits) > 20:
-            out["stocking_wait_note"] = (f"적치 대기 총 {summ['total_count']}건 중 오래된 상위 20건만 표시. "
+        out["stocking_wait"] = waits[:10]        # 상세는 오래된 순 상위 10건 샘플(집계는 stocking_summary)
+        if len(waits) > 10:
+            out["stocking_wait_note"] = (f"적치 대기 총 {summ['total_count']}건 중 오래된 상위 10건만 표시. "
                                          "건수·날짜별·중복 집계는 stocking_summary를 근거로 답할 것")
         if scope == "inbound":  # 입고 전용 요약에선 입고예정도 함께(전체 '할 일'엔 미포함)
             out["inbound_planned"] = lookups.lookup_inbound_orders(["PLANNED"])["orders"]
     if scope in ("all", "picking", "outbound"):
         out["picking"] = picking.recommend_picking(_current_dt(), forecast.risk_level_map())["recommendations"][:5]
     if scope in ("all", "risk"):
-        out["inventory_risk"] = forecast.scan_inventory_risk(["HIGH", "MEDIUM", "WATCH"])["risks"]
+        risks = forecast.scan_inventory_risk(["HIGH", "MEDIUM", "WATCH"])["risks"]
+        out["inventory_risk_count"] = len(risks)
+        out["inventory_risk"] = risks[:15]       # 상한 — 컨텍스트 잘림 방지(전체 수는 count로)
     if scope in ("all", "shipping"):
         out["shipping_pending"] = lookups.lookup_shipping_pending()["pending"]
     return out
@@ -204,6 +217,14 @@ def _h_workload_estimate(p):
     return workload.estimate_workload(scope=p.get("scope") or "all", current_datetime=_current_dt())
 
 
+def _h_order_quantity(p):
+    return forecast.required_order_quantities(limit=20)
+
+
+def _h_order_create(p):
+    return {"draft": drafts.create_purchase_order_draft(p["sku"], p.get("qty"))}
+
+
 def _h_replenish_create(p):
     return {"draft": drafts.create_replenishment_draft(p["sku"])}
 
@@ -218,7 +239,8 @@ _HANDLERS = {
     "replenishment_query": _h_replenishment_query, "replenish_create": _h_replenish_create,
     "risk_response_recommendation": _h_risk_response, "stocking_task_create": _h_stocking_create,
     "picking_instruction_create": _h_picking_create, "shipping_confirm": _h_shipping_confirm,
-    "workload_estimate": _h_workload_estimate,
+    "workload_estimate": _h_workload_estimate, "order_quantity_query": _h_order_quantity,
+    "order_create": _h_order_create,
     "policy_question": lambda p: {}, "smalltalk": lambda p: {},
     "greeting": lambda p: {}, "out_of_scope": lambda p: {},
 }
@@ -231,7 +253,9 @@ _CONVERSATION_PERSONA = (
     "사용자가 이름을 알려주면 기억하고, 이름을 물으면 이전 대화에서 찾아 답합니다. 모르면 모른다고 합니다.\n"
     "단순 인사에는 간단히 인사로 답하고, 매번 기능 목록을 나열하지 않습니다.\n"
     "WMS·창고 운영과 무관한 일반 지식/날씨/시사 질문은 정중히 'WMS 운영 관련만 도와드린다'고 안내합니다. "
-    "단, 이름·개인정보·이전 발화 기억 요청은 범위 밖이 아니라 정상 응대합니다."
+    "단, 이름·개인정보·이전 발화 기억 요청은 범위 밖이 아니라 정상 응대합니다.\n"
+    "직전 대화에 등장한 표현·데이터 항목·용어(예: urgent, 집중일, 우선순위점수, 소진예정일 등)의 의미를 물으면 "
+    "일반 사전 정의로 회피하지 말고 그 대화·운영 맥락에서 구체적으로 설명합니다."
 )
 
 
@@ -275,6 +299,11 @@ _PERSONA = (
     "임의 생성하지 않습니다('약','아마' 금지). HIGH 위험·출고임박은 첫머리에. 이모지·과장 금지.\n"
     "상태변경(적치/피킹지시·출고확정)은 반드시 '승인이 필요합니다'를 명시합니다.\n"
     "RAG 근거가 부족(abstain)하면 정책을 지어내지 말고 '문서 근거가 부족합니다'라고 답합니다.\n"
+    "표현: 영문 필드명·수식 원문(projected_inventory 등)을 그대로 노출하지 말고 평문 한국어로 풀어 설명합니다.\n"
+    "재고위험/소진일: 판정 기준은 '오늘(reference_date, 실시간)'입니다. 예상 소진일이 오늘보다 과거이거나 "
+    "already_short=true이면, 이는 미처리 출고(backlog)가 누적된 결과이므로 '현재 가용 N개 대비 미처리 출고 M개로, "
+    "이미 소진(결품) 상태이거나 소진되었어야 한다'는 식으로 현재 가용·미처리 수량을 들어 구체적으로 설명합니다. "
+    "단순히 소진일 날짜만 반복하지 않습니다.\n"
     "recent_dialogue가 있으면 직전 맥락과 자연스럽게 이어지도록 답합니다(반복 인사·재설명 금지)."
 )
 
@@ -307,7 +336,7 @@ def response_generator_node(state: dict) -> dict:
         scope_note = (f"[요약 범위] 이번 답변은 '{labels.get(scope, scope)}' 영역만 다루세요. "
                       "그 외 영역(피킹·출고·재고위험 등)은 언급하지 마세요.\n")
     user = (scope_note + "아래 Tool 결과와 RAG 근거를 바탕으로 운영자에게 답하세요. JSON 아님, 자연어.\n"
-            + json.dumps(context, ensure_ascii=False, default=str)[:6000])
+            + json.dumps(context, ensure_ascii=False, default=str)[:9000])
     resp = complete([{"role": "system", "content": _PERSONA}, {"role": "user", "content": user}],
                     model=settings.openai_chat_model, node="Response Generator")
     return {"final_response": resp.choices[0].message.content}

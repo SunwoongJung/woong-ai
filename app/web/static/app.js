@@ -783,7 +783,8 @@ function renderDryRun(dry) {
 function renderApproval(drafts, toolResults) {
   if (!drafts || !drafts.length) return "";
   const d = drafts[0], id = d.draft_id || "";
-  const TYPE = { STK: "적치지시 생성", PCK: "피킹지시 발행", SHP: "출고확정" };
+  const TYPE = { STK: "적치지시 생성", PCK: "피킹지시 발행", SHP: "출고확정", PO: "발주",
+    ALC: "재고 할당", RPL: "재고보충", DSP: "처분" };
   const label = TYPE[(id.split("-")[1] || "")] || "상태 변경";
   const dry = d.dry_run || (toolResults && toolResults.dry_run) || null;
   return `<div class="approval" data-draft="${escapeHtml(id)}">
@@ -793,6 +794,7 @@ function renderApproval(drafts, toolResults) {
     <div class="ap-actions">
       <button class="btn-primary ap-yes">승인</button>
       <button class="btn-ghost ap-no">거부</button>
+      <button class="btn-ghost ap-hold">보류</button>
     </div></div>`;
 }
 function wireApproval(node, toolResults, onDone) {
@@ -814,10 +816,15 @@ function wireApproval(node, toolResults, onDone) {
   };
   box.querySelector(".ap-yes").addEventListener("click", () => call(true));
   box.querySelector(".ap-no").addEventListener("click", () => call(false));
+  const hold = box.querySelector(".ap-hold");
+  if (hold) hold.addEventListener("click", () => {
+    // 보류: DB 상태 변경 없음(PENDING 유지) → Approval 탭 승인 대기 목록에 남아 일괄 처리 가능
+    box.innerHTML = `<div class="ap-done mut">⏸ 보류했습니다 — Approval 탭 ‘승인 대기’에서 일괄 처리하세요.</div>`;
+  });
 }
 // ---------- Approval 탭 ----------
 const ACTION_LABEL = { ALLOCATION: "할당", STOCKING: "적치지시", PICKING: "피킹지시",
-  SHIPPING: "출고확정", REPLENISH: "재고보충", DISPOSAL: "처분" };
+  SHIPPING: "출고확정", REPLENISH: "재고보충", DISPOSAL: "처분", ORDER: "발주" };
 
 function apDrawCard(d, pending) {
   const label = ACTION_LABEL[d.action_type] || d.action_type;
@@ -830,7 +837,8 @@ function apDrawCard(d, pending) {
     return `<div class="ap-card approval" data-draft="${safeText(d.draft_id)}">${head}
       ${renderDryRun(d.dry_run)}
       <div class="ap-actions"><button class="btn-primary ap-yes">승인</button>
-        <button class="btn-ghost ap-no">거부</button></div></div>`;
+        <button class="btn-ghost ap-no">거부</button>
+        <button class="btn-ghost ap-hold">보류</button></div></div>`;
   }
   return `<div class="ap-card">${head}${renderDryRun(d.dry_run)}</div>`;
 }

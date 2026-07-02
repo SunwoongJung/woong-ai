@@ -15,6 +15,8 @@ app/.env
 
 # DB / 인덱스 / 산출물
 *.db
+*.db-shm
+*.db-wal
 app/rag/index/
 app/eval/results/
 

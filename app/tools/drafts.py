@@ -77,6 +77,33 @@ def create_replenishment_draft(sku: str) -> dict:
     return {"draft_id": did, "dry_run": dry_run_action(did), "status": "PENDING_APPROVAL"}
 
 
+def create_purchase_order_draft(sku: str, qty) -> dict:
+    """발주(구매 입고) Draft — 승인 시 inbound_orders에 입고 발주 생성. 도착=오늘+리드타임."""
+    from datetime import date, timedelta
+    p = q("SELECT lead_time_days FROM products WHERE sku=?", (sku,))
+    if not p:
+        return {"error": f"{sku} 상품 마스터에 없음"}
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        return {"error": "발주 수량이 올바르지 않습니다(정수 필요)"}
+    if qty <= 0:
+        return {"error": "발주 수량은 1개 이상이어야 합니다"}
+    lead = int(p[0]["lead_time_days"] or 3)
+    eta = (date.today() + timedelta(days=lead)).isoformat()
+    payload = {"sku": sku, "qty": qty, "lead_time_days": lead, "expected_date": eta}
+    did = _draft_id("PO")
+    conn = get_connection()
+    try:
+        conn.execute("INSERT INTO action_drafts(draft_id,action_type,target_id,payload_json,status)"
+                     " VALUES(?,?,?,?,?)",
+                     (did, "ORDER", sku, json.dumps(payload, ensure_ascii=False), "PENDING_APPROVAL"))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"draft_id": did, "dry_run": dry_run_action(did), "status": "PENDING_APPROVAL"}
+
+
 def create_disposal_draft(sku: str) -> dict:
     if not q("SELECT 1 FROM products WHERE sku=?", (sku,)):
         return {"error": "SKU 없음"}
@@ -162,6 +189,14 @@ def dry_run_action(draft_id: str) -> dict:
         if payload["qty"] <= 0:
             warnings.append("보충 수량 0 — 보관 재고 확인 필요")
 
+    elif d["action_type"] == "ORDER":
+        avail = q("SELECT COALESCE(SUM(qty),0) s FROM inventory WHERE sku=? AND status='AVAILABLE'",
+                  (payload["sku"],))[0]["s"]
+        changes.append({"table": "inbound_orders", "field": "신규 발주(PLANNED)",
+                        "after": f"{payload['sku']} {payload['qty']}개, 도착예정 {payload['expected_date']}"
+                                 f"(리드타임 {payload['lead_time_days']}일)"})
+        changes.append({"table": "재고 반영", "note": "도착·적치 완료 시 가용재고 증가", "현재_가용": avail})
+
     elif d["action_type"] == "DISPOSAL":
         stock = q("SELECT COALESCE(SUM(qty),0) s FROM inventory WHERE sku=? AND status='AVAILABLE'",
                   (payload["sku"],))[0]["s"]
@@ -218,7 +253,8 @@ def approve_action(draft_id: str, approved: bool, user_id: str) -> dict:
 
     dispatch = {"STOCKING": issue_stocking_task, "PICKING": issue_picking_instruction,
                 "SHIPPING": confirm_shipping, "ALLOCATION": issue_allocation,
-                "REPLENISH": issue_replenishment, "DISPOSAL": issue_disposal}
+                "REPLENISH": issue_replenishment, "DISPOSAL": issue_disposal,
+                "ORDER": issue_purchase_order}
     executed = dispatch[d["action_type"]](draft_id)
 
     conn = get_connection()
@@ -242,6 +278,22 @@ def issue_replenishment(draft_id: str) -> dict:
     d = _get_draft(draft_id)
     p = json.loads(d["payload_json"])
     return replenishment.execute_replenishment(p["sku"], p["from_location"], p["to_location"], p["qty"])
+
+
+def issue_purchase_order(draft_id: str) -> dict:
+    d = _get_draft(draft_id)
+    p = json.loads(d["payload_json"])
+    inbound_no = f"PO-{uuid.uuid4().hex[:6]}"
+    conn = get_connection()
+    try:
+        conn.execute("INSERT INTO inbound_orders(inbound_no,sku,qty,expected_date,status,supplier)"
+                     " VALUES(?,?,?,?,?,?)",
+                     (inbound_no, p["sku"], p["qty"], p["expected_date"], "PLANNED", "PO"))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"inbound_no": inbound_no, "sku": p["sku"], "qty": p["qty"],
+            "expected_date": p["expected_date"], "status": "PLANNED"}
 
 
 def issue_disposal(draft_id: str) -> dict:

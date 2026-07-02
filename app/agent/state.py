@@ -33,8 +33,8 @@ INTENTS = [
     "allocation_query", "allocation_create",
     "dead_stock_query", "disposal_create", "replenishment_query", "replenish_create",
     "inventory_risk", "risk_response_recommendation", "shipping_pending_query",
-    "shipping_confirm", "kpi_query", "simulation_query", "workload_estimate", "policy_question",
-    "smalltalk", "greeting", "out_of_scope",
+    "shipping_confirm", "kpi_query", "simulation_query", "workload_estimate", "order_quantity_query",
+    "order_create", "policy_question", "smalltalk", "greeting", "out_of_scope",
 ]
 
 # 인텐트별 필수 파라미터
@@ -45,6 +45,7 @@ REQUIRED_PARAMS = {
     "allocation_create": ["order_no"],
     "disposal_create": ["sku"],
     "replenish_create": ["sku"],
+    "order_create": ["sku", "qty"],
     "inventory_risk": ["sku"],
     "shipping_confirm": ["order_no"],
 }
@@ -55,4 +56,4 @@ RAG_INTENTS = {"policy_question", "stocking_recommendation", "picking_recommenda
 
 # 상태변경(승인 필요) 인텐트
 STATE_CHANGE_INTENTS = {"stocking_task_create", "picking_instruction_create", "shipping_confirm",
-                        "allocation_create", "disposal_create", "replenish_create"}
+                        "allocation_create", "disposal_create", "replenish_create", "order_create"}
