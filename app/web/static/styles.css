@@ -281,6 +281,12 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 .seg-btn.active { background: #fff; color: var(--accent-ink); box-shadow: var(--shadow); }
 .chart-wrap { width: 100%; min-height: 240px; position: relative; color: var(--ink-sub); font-size: 13px; }
 .chart-wrap svg { width: 100%; height: 260px; display: block; }
+/* KPI 일별 추이 미니 라인차트 (현재 기준 vs What-if) */
+.ins-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.ins-cap { font-size: 12px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
+.ins-mini { position: relative; }
+.chart-wrap .ins-mini svg { height: 150px; }
+.chart-wrap .ins-mini .chart-legend { font-size: 10px; }
 .chart-legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-sub); margin: 4px 2px 0; }
 .chart-legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 5px; }
 .chart-tip { position: absolute; pointer-events: none; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 7px 10px; font-size: 12px; color: var(--ink); white-space: nowrap; transform: translate(-50%, -115%); display: none; z-index: 5; }

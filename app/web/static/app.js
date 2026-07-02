@@ -1,7 +1,7 @@
 // WOONG AI — SPA (P1~P5)
 const $ = (s) => document.querySelector(s);
 let META = { base_date: null };
-let LAST = { result: null, forecast: null, comparison: null, insightTab: "inv", kpiDashboard: null, kpiTargets: null };
+let LAST = { result: null, whatif: null, forecast: null, comparison: null, kpiDashboard: null, kpiTargets: null };
 let CHAT = { sessionId: null, sessions: [], filter: "" };
 
 const kpi = (res, name) => (res.kpis || []).find((k) => k.kpi_name === name) || {};
@@ -19,6 +19,11 @@ const KPI_META = {
   shipping_delay_cost: { label: "지연 비용(가중)", desc: "납기 초과 비용 — 고회전 SKU 포함 주문은 일반의 10배로 가중", unit: "" },
   picking_wait_minutes: { label: "피킹 대기 시간", desc: "피킹 작업이 시작되기 전까지 대기한 시간", unit: "분" },
   resource_utilization_team: { label: "작업팀 가동률", desc: "작업자 2명과 지게차 1대로 구성된 작업팀의 평균 사용률", unit: "%" },
+  putaway_delay_count: { label: "적치지연 건수", desc: "입고 완료 후 적치가 지연된 건수", unit: "건" },
+  zone_over_target_count: { label: "목표 초과 Zone 수", desc: "점유율이 목표를 초과한 Zone 수", unit: "개" },
+  out_of_stock_count: { label: "품절 SKU 수", desc: "현재 가용재고가 0인 SKU 수(현재값)", unit: "개" },
+  stockout_within_week_count: { label: "1주 내 소진 예상", desc: "7일 내 소진 예상 SKU 수(현재값)", unit: "건" },
+  inventory_value: { label: "재고금액", desc: "보유 재고 수량 × 단가(현재값)", unit: "" },
   zone_max_occupancy: { label: "Zone 최대 점유율", desc: "시뮬레이션 중 각 Zone이 도달한 최대 점유율", unit: "%" },
   expected_stockout_date: { label: "예상 재고 소진일", desc: "시뮬레이션상 특정 SKU 재고가 소진될 것으로 예상되는 날짜", unit: "일자" },
 };
@@ -68,17 +73,25 @@ function deltaChip(row, field, lowerIsBetter = true) {
   return `<span class="kpi-delta ${cls}">${arrow} ${Math.abs(pct).toFixed(1)}%<span class="base">기준 대비</span></span>`;
 }
 
+// 시뮬 지표 카드 = KPI 대시보드 9종으로 통일. 시나리오 지표는 버전 비교 delta, 정적 지표는 '현재값' 고정.
 function renderKpis(res, comparison, invValue) {
-  const sd = kpi(res, "shipping_delay_count"), pw = kpi(res, "picking_wait_minutes"), ut = kpi(res, "resource_utilization_team");
-  const dc = kpi(res, "shipping_delay_cost");
-  const so = earliestStockout(res), soDays = so ? daysFromBase(so.p50) : null;
+  const zo = kpi(res, "zone_occupancy"), ut = kpi(res, "resource_utilization_team");
+  const sd = kpi(res, "shipping_delay_count"), pd = kpi(res, "putaway_delay_count");
+  const pw = kpi(res, "picking_wait_minutes"), zot = kpi(res, "zone_over_target_count");
+  const oos = kpi(res, "out_of_stock_count"), sow = kpi(res, "stockout_within_week_count");
+  const iv = kpi(res, "inventory_value");
+  const STATIC = `<span class="kpi-delta flat">현재값</span>`;
+  const invM = (iv.mean != null ? iv.mean : invValue);
   const cards = [
-    { ico: "🕐", label: kpiLabel("shipping_delay_count"), val: fmtNum(sd.mean, 2), unit: "건", delta: deltaChip(cmpRow(comparison, "shipping_delay_count"), "mean") },
-    { ico: "💸", label: kpiLabel("shipping_delay_cost"), val: fmtNum(dc.mean, 0), unit: "", delta: deltaChip(cmpRow(comparison, "shipping_delay_cost"), "mean") },
-    { ico: "⏳", label: kpiLabel("picking_wait_minutes"), val: fmtNum(pw.p90, 1), unit: "분", delta: deltaChip(cmpRow(comparison, "picking_wait_minutes"), "p90") },
+    { ico: "🗄", label: kpiLabel("zone_occupancy"), val: zo.mean != null ? fmtNum(zo.mean * 100, 1) : "—", unit: "%", delta: deltaChip(cmpRow(comparison, "zone_occupancy"), "mean") },
     { ico: "👥", label: kpiLabel("resource_utilization_team"), val: ut.mean != null ? fmtNum(ut.mean * 100, 1) : "—", unit: "%", delta: deltaChip(cmpRow(comparison, "resource_utilization_team"), "mean", false) },
-    { ico: "📅", label: kpiLabel("expected_stockout_date"), val: soDays != null ? "D+" + soDays : "—", unit: "", delta: `<span class="kpi-delta flat">${so ? so.p50 : "소진 없음"}</span>` },
-    { ico: "💰", label: "총 재고 비용", val: invValue != null ? "₩" + (invValue / 1e6).toFixed(1) + "M" : "—", unit: "", delta: `<span class="kpi-delta flat">예시 단가 기준</span>` },
+    { ico: "🕐", label: kpiLabel("shipping_delay_count"), val: fmtNum(sd.mean, 2), unit: "건", delta: deltaChip(cmpRow(comparison, "shipping_delay_count"), "mean") },
+    { ico: "📦", label: kpiLabel("putaway_delay_count"), val: fmtNum(pd.mean, 2), unit: "건", delta: deltaChip(cmpRow(comparison, "putaway_delay_count"), "mean") },
+    { ico: "⏳", label: kpiLabel("picking_wait_minutes"), val: fmtNum(pw.p90, 1), unit: "분", delta: deltaChip(cmpRow(comparison, "picking_wait_minutes"), "p90") },
+    { ico: "⚠", label: kpiLabel("zone_over_target_count"), val: fmtNum(zot.mean, 0), unit: "개", delta: deltaChip(cmpRow(comparison, "zone_over_target_count"), "mean") },
+    { ico: "🚫", label: kpiLabel("out_of_stock_count"), val: oos.mean != null ? fmtNum(oos.mean, 0) : "—", unit: "개", delta: STATIC },
+    { ico: "⌛", label: kpiLabel("stockout_within_week_count"), val: sow.mean != null ? fmtNum(sow.mean, 0) : "—", unit: "건", delta: STATIC },
+    { ico: "💰", label: kpiLabel("inventory_value"), val: invM != null ? "₩" + (invM / 1e6).toFixed(1) + "M" : "—", unit: "", delta: STATIC },
   ];
   $("#kpi-row").innerHTML = cards.map((c) => `
     <div class="kpi"><div class="kpi-top"><span class="kpi-ico">${c.ico}</span>${c.label}</div>
@@ -375,68 +388,27 @@ function svgBars(el, groups, opts = {}) {
   el.innerHTML = svg + `<div class="chart-legend">${names}</div>`;
 }
 
+// KPI 4종의 시뮬 horizon(7일) 일별 추이를 현재 기준 vs What-if 라인으로(%지표는 ×100)
 function renderInsight() {
   const el = $("#insight-chart");
-  if (LAST.insightTab === "inv") {
-    const fc = LAST.forecast && LAST.forecast.forecast;
-    if (!fc || !fc.daily_projection || !fc.daily_projection.length) { el.textContent = "재고 추이 데이터 없음"; return; }
-    const dp = fc.daily_projection.slice(0, 14);
-    svgLine(el, {
-      labels: dp.map((d) => d.date.slice(5)),
-      series: [{ name: `재고(예측) · ${LAST.forecast.sku || ""}`, values: dp.map((d) => d.projected_inventory), color: "#2f6bff", area: true }],
-      hlines: fc.safety_stock != null ? [{ y: fc.safety_stock, label: "안전재고 임계선", color: "#e1483b" }] : [],
-    });
-  } else {
-    const r = LAST.result, c = LAST.comparison;
-    const sd = kpi(r, "shipping_delay_count"), pw = kpi(r, "picking_wait_minutes");
-    if (c) {
-      const a = cmpRow(c, "shipping_delay_count"), b = cmpRow(c, "picking_wait_minutes");
-      svgBars(el, [
-        { label: "출고지연(mean)", bars: [{ name: "기준", value: a.baseline_mean, color: "#9db4e8" }, { name: "시나리오", value: a.scenario_mean, color: "#2f6bff" }] },
-        { label: "피킹 P90(분)", bars: [{ name: "기준", value: b.baseline_p90, color: "#9db4e8" }, { name: "시나리오", value: b.scenario_p90, color: "#2f6bff" }] },
-      ]);
-    } else {
-      svgBars(el, [
-        { label: "출고지연(mean)", bars: [{ name: "mean", value: sd.mean || 0, color: "#2f6bff" }] },
-        { label: "피킹 P90(분)", bars: [{ name: "p90", value: pw.p90 || 0, color: "#2f6bff" }] },
-      ]);
-    }
-  }
-}
-
-/* ---------- Agent Copilot ---------- */
-function recommendScenario(p) {
-  const w = p.worker_count, f = p.forklift_count, teams = Math.min(Math.floor(w / 2), f);
-  if (Math.floor(w / 2) <= f) { const dw = w % 2 === 0 ? 2 : 1; return { worker_delta: dw, forklift_delta: 0, label: `작업자 +${dw}명 증원` }; }
-  return { worker_delta: 0, forklift_delta: 1, label: "지게차 +1대 투입" };
-}
-async function loadCopilot(params) {
-  const sc = recommendScenario(params);
-  const body = { horizon_days: Number($("#horizon").value), replications: 15, scenario: { worker_delta: sc.worker_delta, forklift_delta: sc.forklift_delta } };
-  const resp = await fetch("/simulate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((x) => x.json());
-  const c = resp.comparison || [];
-  const rows = [
-    ["출고지연(mean)", cmpRow(c, "shipping_delay_count"), "mean", true, "분"],
-    ["피킹처리 P90", cmpRow(c, "picking_wait_minutes"), "p90", true, "분"],
-    ["팀 가동률", cmpRow(c, "resource_utilization_team"), "mean", false, "", true],
+  const bDaily = LAST.result && LAST.result.kpi_daily;
+  if (!bDaily || !bDaily.length) { el.textContent = "일별 KPI 데이터 없음 — 시뮬레이션을 실행하세요"; return; }
+  const wDaily = (LAST.whatif && LAST.whatif.kpi_daily) || null;
+  const days = bDaily.map((d) => "D" + d.day);
+  const SPECS = [
+    { key: "zone_occupancy", label: "Zone 점유율(%)", scale: 100 },
+    { key: "shipping_delay_count", label: "출고지연(건)", scale: 1 },
+    { key: "putaway_delay_count", label: "적치지연(건)", scale: 1 },
+    { key: "resource_utilization_team", label: "가동률(%)", scale: 100 },
   ];
-  const items = rows.map(([label, row, fld, lower, unit, pctv]) => {
-    if (!row) return "";
-    const b = row["baseline_" + fld], s = row["scenario_" + fld], d = row["delta_" + fld];
-    const pct = b ? (d / Math.abs(b)) * 100 : 0;
-    const improved = lower ? d < 0 : d > 0;
-    const fmt = (v) => pctv ? (v * 100).toFixed(1) + "%" : Number(v).toFixed(1) + unit;
-    return `<div class="reco-item"><span class="chk">✔</span>${label}: ${fmt(b)} → ${fmt(s)}
-      <span class="imp ${improved ? "down" : "up"}">${d < 0 ? "▼" : "▲"} ${Math.abs(pct).toFixed(1)}%</span></div>`;
-  }).join("");
-  $("#copilot-body").innerHTML = `
-    <div class="lead">인사이트에 근거한 시뮬레이션 결과를 분석하여 최적의 운영 전략을 제안드립니다.</div>
-    <div class="reco-card">
-      <div class="reco-title">추천: ${sc.label}</div>
-      <div class="reco-sub">${sc.label} 시 다음 효과를 얻을 것으로 예상됩니다.</div>
-      <div class="reco-list">${items}</div>
-      <div class="reco-foot">신뢰도: 시뮬레이션 ${body.replications}회 기반 · 시나리오 ${JSON.stringify(body.scenario)}</div>
-    </div>`;
+  el.innerHTML = `<div class="ins-grid">`
+    + SPECS.map((sp) => `<div class="ins-cell"><div class="ins-cap">${sp.label}</div><div class="ins-mini" id="ins-${sp.key}"></div></div>`).join("")
+    + `</div>`;
+  SPECS.forEach((sp) => {
+    const series = [{ name: "현재 기준", values: bDaily.map((d) => (d[sp.key] || 0) * sp.scale), color: "#16a34a" }];
+    if (wDaily && wDaily.length) series.push({ name: "What-if", values: wDaily.map((d) => (d[sp.key] || 0) * sp.scale), color: "#2f6bff" });
+    svgLine($("#ins-" + sp.key), { labels: days, series });
+  });
 }
 
 /* ---------- 데이터 로드 ---------- */
@@ -457,21 +429,29 @@ async function fetchForecast(sku) {
 
 /* ---------- 버전 조회/비교 + 통합 렌더 (single source of truth = 표시 버전) ---------- */
 let VERSIONS = [];
+let BASELINE_VER = null;
+const fmtTs = (ts) => (ts ? String(ts).replace("T", " ").slice(0, 16) : "—");
 function verLabel(v) {
   const w = v.worker_count == null ? "?" : v.worker_count;
   const f = v.forklift_count == null ? "?" : v.forklift_count;
-  return `${v.version_name} · ${v.run_type} · 작업자 ${w}/지게차 ${f}`;
+  return `${v.version_name} · 작업자 ${w}/지게차 ${f}`;
 }
+// 표시(좌)=유일한 BASELINE(현재 기준·반영시각), 비교(우)=WHATIF만(최신 기본)
 async function loadVersions() {
   const r = await fetch("/simulation/versions").then((x) => x.json()).catch(() => ({ versions: [] }));
   VERSIONS = r.versions || [];
-  const opts = VERSIONS.map((v) => `<option value="${v.version_name}">${verLabel(v)}</option>`).join("");
+  BASELINE_VER = VERSIONS.find((v) => v.run_type === "BASELINE") || null;   // 최신순 → 첫 BASELINE(유일)
+  const whatifs = VERSIONS.filter((v) => v.run_type === "WHATIF");
   const dv = $("#ver-display"), cv = $("#ver-compare");
-  const keepD = dv.value, keepC = cv.value;
-  dv.innerHTML = opts || `<option value="">(버전 없음)</option>`;
-  cv.innerHTML = `<option value="">(비교 안 함)</option>` + opts;
-  if (keepD) dv.value = keepD;
-  if (keepC) cv.value = keepC;
+  dv.innerHTML = BASELINE_VER
+    ? `<option value="${BASELINE_VER.version_name}">현재 기준 · 반영 ${fmtTs(BASELINE_VER.created_at)}</option>`
+    : `<option value="">(현재 기준 없음)</option>`;
+  dv.disabled = true;   // 좌측은 항상 현재 기준으로 고정
+  const keepC = cv.value;
+  cv.innerHTML = `<option value="">(비교 안 함)</option>`
+    + whatifs.map((v) => `<option value="${v.version_name}">${verLabel(v)}</option>`).join("");
+  if (keepC && whatifs.some((v) => v.version_name === keepC)) cv.value = keepC;
+  else if (whatifs.length) cv.value = whatifs[0].version_name;   // 기본: 최신 What-if
 }
 // 표시 버전(+선택적 비교 기준) 하나로 KPI·인사이트·트윈·타임라인을 일괄 렌더
 async function renderAll(result, comparison) {
@@ -480,36 +460,48 @@ async function renderAll(result, comparison) {
   window.__lastParams = result.params;
   renderKpis(result, LAST.comparison, META.inventory_value);
   renderKpiDashboard();
-  const so = earliestStockout(result);
-  LAST.forecast = await fetchForecast(so ? so.sku : "SKU_A001");
   renderInsight();
   renderTwin(result.movement, result.zone_occupancy_timeseries);   // 트윈 = 표시 버전
   renderTimeline(result.bottleneck_events);                        // 타임라인 = 같은 버전의 이벤트
   const cmpName = $("#ver-compare").value;
-  $("#version-badge").textContent = `표시: ${result.version_name} (${result.run_type})`
-    + (comparison && cmpName ? ` · 비교기준 ${cmpName}` : "");
-  updateCommitState(result);
+  $("#version-badge").textContent = `현재 기준 (반영 ${fmtTs(BASELINE_VER && BASELINE_VER.created_at)})`
+    + (comparison && cmpName ? ` · 비교 What-if ${cmpName}` : "");
+  updateCommitState();
   setUpdated();
 }
-function updateCommitState(result) {
-  const btn = $("#commit-baseline");
-  const isWhatif = !!result && result.run_type === "WHATIF";
-  btn.disabled = !isWhatif;
-  btn.title = isWhatif ? "이 버전의 작업자/지게차 수를 운영 기준으로 반영합니다"
-                       : "What-if 버전을 선택하면 활성화됩니다";
+function updateCommitState() {
+  const btn = $("#commit-baseline"); if (!btn) return;
+  const cv = $("#ver-compare").value;
+  btn.disabled = !cv;
+  btn.title = cv ? "선택한 What-if의 작업자/지게차 수를 운영 기준으로 반영합니다"
+                 : "비교할 What-if를 선택하면 활성화됩니다";
 }
 async function selectVersion() {
-  const dv = $("#ver-display").value; if (!dv) return;
-  const cv = $("#ver-compare").value;
-  const result = await fetch(`/simulation/versions/${encodeURIComponent(dv)}`).then((x) => x.json()).catch(() => null);
-  if (!result || result.error) { $("#version-badge").textContent = "버전 로드 실패"; return; }
-  let comparison = null;
-  if (cv && cv !== dv) {
-    const cmp = await fetch(`/simulation/compare?base=${encodeURIComponent(cv)}&target=${encodeURIComponent(dv)}`)
-      .then((x) => x.json()).catch(() => null);
-    comparison = (cmp && cmp.comparison) || null;
+  if (!BASELINE_VER) { $("#version-badge").textContent = "현재 기준 없음 — 시뮬레이션을 실행하세요"; return; }
+  const baseName = BASELINE_VER.version_name;
+  const result = await fetch(`/simulation/versions/${encodeURIComponent(baseName)}`).then((x) => x.json()).catch(() => null);
+  if (!result || result.error) { $("#version-badge").textContent = "현재 기준 로드 실패"; return; }
+  let comparison = null, whatif = null;
+  const cv = $("#ver-compare").value;   // 선택한 What-if — 비교 delta + 일별 궤적
+  if (cv && cv !== baseName) {
+    [whatif, comparison] = await Promise.all([
+      fetch(`/simulation/versions/${encodeURIComponent(cv)}`).then((x) => x.json()).catch(() => null),
+      fetch(`/simulation/compare?base=${encodeURIComponent(baseName)}&target=${encodeURIComponent(cv)}`)
+        .then((x) => x.json()).then((c) => (c && c.comparison) || null).catch(() => null),
+    ]);
   }
+  LAST.whatif = (whatif && !whatif.error) ? whatif : null;
   await renderAll(result, comparison);
+}
+
+// 사용자 버튼용 인터락 — 현재와 동일 조건(증감 0/0)이면 실행 막고 알림. baseline 생성은 runSim 직접 호출.
+async function runSimClick() {
+  const wd = Number($("#worker-delta").value), fd = Number($("#forklift-delta").value);
+  if (wd === 0 && fd === 0) {
+    showToast({ kind: "info", id: "What-if", message: "현재 운영과 동일한 조건입니다. 작업자 또는 지게차 증감을 지정해 주세요." });
+    return;
+  }
+  await runSim();
 }
 
 async function runSim() {
@@ -519,12 +511,10 @@ async function runSim() {
   if (wd !== 0 || fd !== 0) body.scenario = { worker_delta: wd, forklift_delta: fd };
   try {
     const resp = await fetch("/simulate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((x) => x.json());
-    const result = resp.scenario || resp;
-    await loadVersions();                                          // 새 버전 목록 반영
-    $("#ver-display").value = result.version_name || "";
-    $("#ver-compare").value = resp.comparison && resp.baseline ? (resp.baseline.version_name || "") : "";
-    await renderAll(result, resp.comparison || null);             // 방금 실행 버전을 표시 버전으로
-    if (result.run_type === "BASELINE") loadCopilot(result.params).catch(() => {});
+    const ranWhatif = !!resp.scenario;
+    await loadVersions();                                          // 새 버전 목록 반영(baseline 유일)
+    if (ranWhatif && resp.scenario.version_name) $("#ver-compare").value = resp.scenario.version_name;  // 방금 What-if을 비교 대상으로
+    await selectVersion();                                         // 좌=현재 기준 표시 + 선택 What-if 비교
   } catch (e) {
     $("#version-badge").textContent = "실행 오류: " + e;
   } finally {
@@ -533,13 +523,11 @@ async function runSim() {
 }
 
 async function commitBaseline() {
-  // 표시 중인(WHATIF) 버전의 해석된 자원 수를 운영 기준으로 반영
-  const dv = $("#ver-display").value;
-  let p = window.__lastParams;
-  if (dv) {
-    const result = await fetch(`/simulation/versions/${encodeURIComponent(dv)}`).then((x) => x.json()).catch(() => null);
-    if (result && result.params) p = result.params;
-  }
+  // 선택한 What-if(비교 대상)의 자원 수를 운영 기준으로 반영 → 새 BASELINE 재실행
+  const cv = $("#ver-compare").value;
+  if (!cv) return;
+  const result = await fetch(`/simulation/versions/${encodeURIComponent(cv)}`).then((x) => x.json()).catch(() => null);
+  const p = result && result.params;
   if (!p) return;
   $("#commit-baseline").disabled = true;
   await fetch(`/resources/update?worker=${p.worker_count}&forklift=${p.forklift_count}`, { method: "POST" }).catch(() => {});
@@ -574,10 +562,6 @@ function activateTab(name) {
 }
 function setupTabs() {
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => activateTab(t.dataset.tab)));
-  document.querySelectorAll("#insight-tabs .seg-btn").forEach((b) => b.addEventListener("click", () => {
-    document.querySelectorAll("#insight-tabs .seg-btn").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active"); LAST.insightTab = b.dataset.it; renderInsight();
-  }));
   const dv = $("#ver-display"), cv = $("#ver-compare");
   if (dv) dv.addEventListener("change", selectVersion);
   if (cv) cv.addEventListener("change", selectVersion);
@@ -1671,7 +1655,7 @@ async function init() {
   const ss = document.querySelector(".side-search");
   if (ss) ss.addEventListener("input", (e) => { CHAT.filter = e.target.value; renderSessions(); });
   const nc = $("#new-chat"); if (nc) nc.addEventListener("click", () => { activateTab("chat"); resetChat(); });
-  $("#run-sim").addEventListener("click", runSim);
+  $("#run-sim").addEventListener("click", runSimClick);
   $("#refresh").addEventListener("click", refreshDashboard);
   $("#refresh-kpi").addEventListener("click", () => {
     loadKpiTargets().then(loadOperationKpis).catch(() => {});
@@ -1694,6 +1678,13 @@ async function init() {
   loadUtilizationTrend().catch(() => {});
   loadDelayTrend().catch(() => {});
   await refreshDataBrowser().catch(() => {});
-  await runSim();
+  await initSim();
+}
+
+// 재시작·재로드 시: 저장된 현재 기준(BASELINE)이 있으면 로드만(재기동 없음), 없을 때만 최초 1회 생성
+async function initSim() {
+  await loadVersions();
+  if (BASELINE_VER) await selectVersion();
+  else await runSim();
 }
 init();

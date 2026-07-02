@@ -145,6 +145,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
             out["_ts"] = [{"sim_time": "D1 00:00",
                            "occupancy": {z: round(zone_max_occ[z], 3) for z in zones}}]
             out["_inv"] = []
+            out["_kpi_daily"] = []
         return out
 
     env = simpy.Environment()
@@ -153,7 +154,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
     metrics = {"picking_waits": [], "shipping_delays": 0, "delay_cost": 0.0, "orders": 0,
                "stockout_min": {}, "zone_max_occ": {z: 0.0 for z in zones},
                "team_busy": 0.0, "putaway_delays": 0, "inbound_count": 0}
-    events, ts, inv_proj = [], [], []
+    events, ts, inv_proj, kpi_daily = [], [], [], []
 
     def touch_zone_peak():
         for zid, z in zones.items():
@@ -228,6 +229,13 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
                 day = int(env.now // MIN_PER_DAY) + 1
                 for s in focal[:8]:
                     inv_proj.append({"sim_time": f"D{day}", "sku": s, "qty": max(0, sku_qty.get(s, 0))})
+                occ_vals = [zone_occ[z] / zones[z]["max_capacity"] for z in zones if zones[z]["max_capacity"]]
+                cap_so_far = team_n * max(1, day) * WORK_MIN_PER_DAY   # 경과일 기준 누적 가용시간
+                kpi_daily.append({"day": day,
+                                  "zone_occupancy": round(sum(occ_vals) / len(occ_vals), 3) if occ_vals else 0.0,
+                                  "shipping_delay_count": metrics["shipping_delays"],
+                                  "putaway_delay_count": metrics["putaway_delays"],
+                                  "resource_utilization_team": round(min(1.0, metrics["team_busy"] / cap_so_far), 3) if cap_so_far else 0.0})
             yield env.timeout(MIN_PER_DAY)
 
     # --- 이벤트 스케줄 ---
@@ -299,7 +307,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
         "putaway_delays": metrics["putaway_delays"],
     }
     if record:
-        out["_events"], out["_ts"], out["_inv"] = events, ts, inv_proj
+        out["_events"], out["_ts"], out["_inv"], out["_kpi_daily"] = events, ts, inv_proj, kpi_daily
     return out
 
 
@@ -370,6 +378,22 @@ def run_des_simulation(horizon_days: int = 14, near_future_days: int | None = No
                          "p90": (base + timedelta(days=int(p90d))).isoformat(),
                          "occurrence_prob": round(len(days) / reps, 3), "unit": "date"})
 
+    # --- KPI 대시보드 카드 통일: 파생(시나리오 반영) + 정적(현재 실데이터) 지표 ---
+    if zones:
+        zt = 0.80
+        zmeans = [statistics.mean([r["zone_max_occ"][z] for r in runs]) for z in zones]
+        zp90 = [_pctl([r["zone_max_occ"][z] for r in runs], 90) for z in zones]
+        kpis.append({"kpi_name": "zone_occupancy", "mean": round(statistics.mean(zmeans), 3),
+                     "p90": round(statistics.mean(zp90), 3), "unit": "percent"})
+        over = [sum(1 for z in zones if r["zone_max_occ"][z] > zt) for r in runs]
+        kpis.append({"kpi_name": "zone_over_target_count", "mean": round(statistics.mean(over), 2),
+                     "p90": _pctl(over, 90), "unit": "count"})
+    from tools import kpi_dashboard as _kd   # 정적 지표(수요 기반·시나리오 무관)는 현재 실데이터 값
+    _so = _kd.stockout_analysis()
+    kpis.append({"kpi_name": "out_of_stock_count", "mean": _so["out_of_stock_count"], "unit": "count", "static": True})
+    kpis.append({"kpi_name": "stockout_within_week_count", "mean": _so["within_week_count"], "unit": "count", "static": True})
+    kpis.append({"kpi_name": "inventory_value", "mean": round(_kd.inventory_value()), "unit": "krw", "static": True})
+
     import datetime as _dt
     from sim.animation import generate_movement
     sim_run_id = f"SIM-{uuid.uuid4().hex[:6]}"
@@ -383,6 +407,7 @@ def run_des_simulation(horizon_days: int = 14, near_future_days: int | None = No
               "scenario": scenario, "params": params, "kpis": kpis,
               "zone_occupancy_timeseries": rep0["_ts"],
               "inventory_projection": rep0["_inv"],
+              "kpi_daily": rep0.get("_kpi_daily", []),
               "bottleneck_events": rep0["_events"],
               "movement": generate_movement(w, f, horizon_days=horizon_days)}
     if persist:
@@ -414,6 +439,13 @@ def _persist(sim_run_id, version_name, run_type, scenario, horizon_days, near, r
         for e in result["bottleneck_events"]:
             conn.execute("INSERT INTO simulation_events(sim_run_id,sim_time,event_type,detail_json) VALUES(?,?,?,?)",
                          (sim_run_id, e["sim_time"], e["event_type"], json.dumps(e["detail"], ensure_ascii=False)))
+        if run_type == "BASELINE":   # BASELINE(현재 운영 스냅샷)은 항상 1개만 — 이전 baseline 제거
+            for o in conn.execute("SELECT sim_run_id FROM simulation_runs WHERE run_type='BASELINE' AND sim_run_id!=?",
+                                  (sim_run_id,)).fetchall():
+                rid = o["sim_run_id"]
+                conn.execute("DELETE FROM simulation_kpis WHERE sim_run_id=?", (rid,))
+                conn.execute("DELETE FROM simulation_events WHERE sim_run_id=?", (rid,))
+                conn.execute("DELETE FROM simulation_runs WHERE sim_run_id=?", (rid,))
         conn.commit()
     finally:
         conn.close()

@@ -382,7 +382,7 @@ def risk_scan(r: RiskScanReq):
 def simulate(r: SimulateReq):
     if r.scenario:
         base = des.run_des_simulation(horizon_days=r.horizon_days, near_future_days=r.near_future_days,
-                                      replications=r.replications)
+                                      replications=r.replications, persist=False)   # 비교용 임시(저장 baseline 유지)
         scen = whatif.simulate_operation_what_if(r.scenario, horizon_days=r.horizon_days,
                                                  near_future_days=r.near_future_days, replications=r.replications)
         return {"baseline": base, "scenario": scen,

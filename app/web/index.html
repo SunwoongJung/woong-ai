@@ -57,39 +57,32 @@
         <div class="sim-section-label">What-if 실행 — 현재 기준에 증감을 적용해 시뮬레이션</div>
         <div class="controls card">
           <div class="ctrl"><label>horizon(일)</label><input type="number" id="horizon" min="3" max="30" value="7" /></div>
-          <div class="ctrl"><label>replications</label><input type="number" id="reps" min="10" max="300" step="10" value="40" /></div>
+          <div class="ctrl"><label>replications</label><input type="number" id="reps" min="10" max="300" step="10" value="10" /></div>
           <div class="ctrl"><label>작업자 증감</label><input type="number" id="worker-delta" min="-2" max="6" value="0" /></div>
           <div class="ctrl"><label>지게차 증감</label><input type="number" id="forklift-delta" min="-2" max="6" value="0" /></div>
           <button class="btn-primary" id="run-sim">▶ 시뮬레이션 실행</button>
         </div>
 
-        <div class="sim-section-label">버전 조회 · 비교 — 표시 버전 하나가 모든 시각화의 기준</div>
+        <div class="sim-section-label">버전 조회 · 비교 — 좌측은 항상 현재 기준(BASELINE), 우측 What-if과 비교</div>
         <div class="version-row">
-          <div class="ver-pick"><label for="ver-display">표시 버전</label><select id="ver-display"></select></div>
-          <div class="ver-pick"><label for="ver-compare">비교 기준</label><select id="ver-compare"></select></div>
-          <span class="version-badge" id="version-badge">표시 버전: —</span>
-          <button class="btn-ghost" id="commit-baseline" disabled title="What-if 버전을 선택하면 활성화됩니다">이 버전을 운영 기준으로 반영</button>
+          <div class="ver-pick"><label for="ver-display">현재 기준(고정)</label><select id="ver-display" disabled></select></div>
+          <div class="ver-pick"><label for="ver-compare">비교 What-if</label><select id="ver-compare"></select></div>
+          <span class="version-badge" id="version-badge">현재 기준: —</span>
+          <button class="btn-ghost" id="commit-baseline" disabled title="비교할 What-if를 선택하면 활성화됩니다">이 What-if를 운영 기준으로 반영</button>
         </div>
 
         <div class="kpi-row kpi-row-auto" id="kpi-row">
           <!-- KPI 카드 (JS 렌더) -->
         </div>
 
+        <div class="card panel-min" id="panel-insight">
+          <div class="panel-head insight-head">
+            <span>KPI 7일 추이 — 현재 기준 vs What-if (일별)</span>
+          </div>
+          <div class="panel-body"><div id="insight-chart" class="chart-wrap">불러오는 중...</div></div>
+        </div>
+
         <div class="grid-2">
-          <div class="card panel-min" id="panel-insight">
-            <div class="panel-head insight-head">
-              <span>예측 인사이트</span>
-              <div class="seg" id="insight-tabs">
-                <button class="seg-btn active" data-it="inv">재고 추이</button>
-                <button class="seg-btn" data-it="delay">출고지연 예측</button>
-              </div>
-            </div>
-            <div class="panel-body"><div id="insight-chart" class="chart-wrap">불러오는 중...</div></div>
-          </div>
-          <div class="card panel-min" id="panel-copilot">
-            <div class="panel-head">🤖 Agent Copilot</div>
-            <div class="panel-body"><div id="copilot-body" class="copilot">분석 중...</div></div>
-          </div>
           <div class="card panel-min" id="panel-twin">
             <div class="panel-head">디지털 트윈 — 창고 시뮬레이션 <span class="head-sub" id="tw-teaminfo"></span></div>
             <div class="panel-body">
