@@ -99,3 +99,11 @@ DES(확률적 KPI, 07_FORECAST_AND_SIMULATION.md):
 - **할당/결품**: ORD005 결품 발생 · scan에 포함 · 할당량 ≤ 요청량.
 - **체화재고/보충**: SKU_A006 = DEAD 식별 · SKU_A007 보충 추천 · 보충량 ≤ 보관재고.
 - **Intent**: allocation_query / dead_stock_query / replenishment_query 분류 추가.
+
+## 11. 하네스 고도화 (2026-07)
+품질·안전·성능을 재현 가능한 프로토콜로 측정하도록 확장. 실측 결과·상세는 [11_EVALUATION_REPORT.md](11_EVALUATION_REPORT.md).
+- **LLM-as-a-Judge**(`eval/judge.py`): Faithfulness·Relevance를 근거(tool_results+rag_evidence) 기준으로 채점. 평균 임계(≥0.8) 게이트. **판별력 검증**(환각→탐지, 동문서답→탐지)을 상시 포함해 judge가 rubber-stamp가 아님을 매 실행 증명.
+- **가드레일**: 프롬프트 인젝션·시스템 프롬프트 노출(상태변경 미유발) + 승인 우회(Approval Gate 라우팅) 셋.
+- **성능 벤치**: 질의 유형별 지연·LLM 호출 수·토큰 + **게이트웨이 왕복 vs 순수 처리시간 분리** 계측.
+- **픽스처 2층 분리**: 데이터 무관 **불변식** + 원본 시드 고정 **골든값**(`--invariant` 플래그로 분리 실행).
+- **격리 실행기**(`eval/run.py`, `python -m eval.run`): 임시 DB에 fresh seed 생성 후 실행 → 라이브 DB·서버와 완전 분리. 전체 60/60 통과.

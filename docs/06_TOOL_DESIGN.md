@@ -339,3 +339,26 @@ DISPOSAL은 해당 SKU의 AVAILABLE 재고를 HOLD로 전환(출고 풀 제외).
 
 ### 11.5 고회전 적치 가중 (2026-06-25)
 `calculate_stocking_score`에서 **고회전 SKU(fast_moving_flag)는 거리 가중을 2배(0.20→0.40)** 적용 → 입구 근처 존 우선 선택. (회전율 가중은 SKU 단위 상수라 위치 순위에 영향이 없던 한계를 보완.) 보관조건 일치(냉장→냉장 존)는 여전히 하드 필터.
+
+### 11.6 KPI 진단(kpi_advisor.py)
+KPI 이상의 원인·개선 SOP를 문서 근거(RAG kpi_policy.md)와 함께 반환. `kpi_query`/`kpi_advice` intent가 사용.
+- `diagnose_zone(zone_id, target=0.80)` · `diagnose_utilization(target=0.90)` · `diagnose_shipping_delay()` · `diagnose_putaway_delay()` — 각 KPI의 현재값·목표·원인 후보·개선 조치.
+- `diagnose(kpi=None, zone_id=None, targets=None)` — 자연어/파라미터로 대상 KPI를 판별해 해당 진단 반환(미특정 시 4개 KPI 전체). 보조지표(입고량·작업량 등)는 `query_operation_kpis` + 문서 근거로 응답.
+
+### 11.7 KPI 대시보드 계산(kpi_dashboard.py)
+운영 KPI를 실측 집계(대시보드·진단 공용). 기준일 `reference_date()`.
+- `zone_occupancy()`·`zone_occupancy_avg()`·`zones_over_target(target)` — 존별/평균 점유율, 목표 초과 존.
+- `team_utilization_trend(days=7, end_date)`·`team_utilization_current(end_date)` — 작업팀 가동률(실측, 합성 fallback 포함).
+- `shipping_delay_count(d)`·`putaway_delay_count(d)`·`delay_trend(days, end_date)` — 출고/적치 지연.
+- `picking_wait(days, end_date)` — 피킹 대기시간.
+
+### 11.8 작업량 추정(workload.py)
+- `team_capacity()` — 작업팀 수·일일 처리 가능 작업량(공정시간 기준).
+- `estimate_workload(scope="all", current_datetime)` — scope(all/inbound/outbound)별 대기 작업량과 예상 완료시간 추정.
+
+### 11.9 일일 할 일 패널(todo.py)
+- `overview(limit=10)` — 4개 버킷(피킹/적치/출고/발주 대기)의 오늘 할 일 요약.
+- `more(bucket, offset, limit=20)` — 버킷 더보기(페이지네이션).
+- `act(bucket, target_id, decision)` — 항목 승인(approve)/보류(hold) 처리.
+
+> §3 표준 Tool 목록은 §11의 신규 Tool(할당·체화·보충·KPI 진단/대시보드·작업량·할 일·발주 Draft)을 포함해 해석한다. 자동운영 계층(dispatch·실행 우선순위·TSP)의 Tool성 로직은 02 §11.4.

@@ -264,3 +264,22 @@ class SessionState(TypedDict):
 - 매 `/chat` 실행의 최종 상태에서 노드 경로를 재구성해 `agent_traces`에 저장(trace_store).
 - LangGraph 미선언 채널 드롭 방지를 위해 `_rag_sufficiency/_rag_abstain/_rag_abstain_msg`를 State에 선언.
 - AI 동작 검증 화면(09 §10)이 조회: Router→ParamExtractor→…→RAG(PRISM·충분성)→Response→Approval.
+
+### 11.4 자동운영(Blackboard) 의사결정 로직 (2026-07)
+대화 Agent와 별개로, ControlAgent가 의사결정 주기마다 한 사이클을 돈다. 한 사이클은 두 단계로 구분되며, 판단·순서·차단 근거는 계산 히스토리(04 §7.6)에 남는다.
+
+- **A단계 · 작업 진행(ZoneScheduler)** — 이미 발행된 작업을 **완료(FINISH_ZONE_LEG) → 시작(START_ZONE_WORK) → 팀 배정(ALLOCATE_TEAM)** 순으로 진행한다(고정 순서, **자원 해제 최우선**). 완료로 팀·존을 먼저 풀어 같은 사이클에서 재활용한다.
+- **B단계 · 신규 편성** — NEW 이벤트를 모아 도메인 Agent가 Action(CREATE_PICKING_TASK·PLACE_REPLENISHMENT_ORDER·CREATE_INBOUND_TASK 등)을 제안하고, 우선순위로 정렬해 실행한다.
+
+**실행 우선순위** — `effective_priority = action_type_base_priority + priority_score`, 내림차순 정렬(동점은 `idempotency_key`/`target_id` 사전순).
+- base: FINISH 100·START 90·ALLOCATE 80·CREATE_PICKING 70·…·CREATE_INBOUND 40 (표에 없으면 30).
+- `priority_score`(조정): 피킹생성 = `100 − 고객우선순위×10`, 발주 70·입고 50·적치 40(고정), ALLOCATE = Dispatch Score.
+
+**Dispatch Score 휴리스틱**(ALLOCATE_TEAM — 어느 작업에 팀을 붙일지):
+- 피킹 = `50·마감긴급 + 25·대기시간 + 15·짧은작업 + 10·동선단순`
+- 적치 = `45·입고경과 + 25·출고필요 + 20·대기시간 + 10·짧은작업`
+- 목표 존이 사용중(단일점유)이면 후보 제외(`SKIP_ZONE_BUSY`), 가용 팀 없으면 `SKIP_NO_TEAM`. (SKU 위험도·고객우선순위는 배정 점수에 미사용)
+
+**피킹 동선(TSP)** — 한 피킹 건의 방문 존 순서는 외부 라이브러리 없이 closed TSP(입구→존→입구) 완전탐색으로 결정(존 ≤9 고정, 사전순 tie-break). 이동시간은 그리드 거리(d_ij) 기반으로 완료 예측·Dispatch에 반영. 자동/HITL(지시) 동일 기준.
+
+**정책 게이트** — 실행 전 Simulation Gate가 노동 게이트(피킹·배정=가동률)·공간 게이트(입고·적치=존 점유율)를 적용, 과부하면 `POLICY_BLOCKED`(미실행)로 남는다. 상세는 manual §11.3~11.4.

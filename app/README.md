@@ -24,10 +24,12 @@ copy .env.example .env           # 실제 키 입력 (Phase 4~5부터 필요)
 | `tools/` | 업무 Tool(조회·적치·피킹·Draft·KPI) | 3 |
 | `sim/` | Forecast + SimPy DES + What-if | 4 |
 | `rag/` | RAG 인덱스·검색(ALR + Sufficient Context) | 5 |
-| `agent/` | LangGraph 워크플로 | 6 |
-| `api/` | FastAPI | 7 |
-| `ui/` | Streamlit + Plotly 시각화 | 8 |
-| `eval/` | 평가 하네스 | 9 |
+| `agent/` | LangGraph 워크플로(대화 Copilot) | 6 |
+| `bb/` | Blackboard 자동운영(컨트롤 루프·도메인 에이전트·ZoneScheduler·실행/정책 게이트) | 9~10 |
+| `api/` | FastAPI(웹 SPA·API 서빙) | 7 |
+| `web/` | 웹 SPA — 대화·자동운영·디지털 트윈·시뮬·KPI(FastAPI가 서빙) | 8 |
+| `ui/` | (레거시) Streamlit 프로토타입 | 8 |
+| `eval/` | 평가 하네스(결정성·RAG·LLM-judge·가드레일·성능) | 9 |
 | `tests/` | 테스트 | - |
 
 `config.py` 가 `.env`에서 키·모델·경로를 로드한다.

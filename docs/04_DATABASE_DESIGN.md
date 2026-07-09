@@ -351,3 +351,15 @@ CREATE INDEX idx_sim_events_run ON simulation_events(sim_run_id);
 
 ### 7.5 보관타입 단순화 (2026-06-25)
 `storage_type` 값에서 **FROZEN(냉동) 폐지 → COLD(냉장)·NORMAL(일반) 2종만** 사용. zones도 냉장 2개(E·F)·나머지 일반. 냉장 제품은 냉장 존에만 적재(하드 제약, 06 §5).
+
+### 7.6 자동운영 계산 히스토리 (2026-07)
+자동운영의 배정·동선·실행 판단을 사후 검증할 수 있도록 3개 히스토리 테이블을 추가한다. 모두 `CREATE TABLE IF NOT EXISTS`로 무중단 생성하며, 최근 N행만 유지(prune)한다.
+
+- `dispatch_scores(id, cycle_ts, task_id, kind, zone_id, dispatch_score, factors_json, decision, created_at)`
+  - 작업팀 배정 계산(Dispatch Score 휴리스틱)의 사이클별 후보 점수·인수(`factors_json`)·결정(`ASSIGNED`/`SKIP_ZONE_BUSY`/`SKIP_NO_TEAM`). 배정이 발생한 사이클만 기록.
+- `zone_routes(id, ts, task_id, order_no, source, zone_ids, zone_sequence, route_cost, travel_minutes, work_minutes, created_at)`
+  - 피킹 ZONE 방문순서(closed TSP) 계산 결과. `source`=`AUTO`(자동)·`HITL`(지시). `zone_sequence`=최적 방문순서(JSON), `route_cost`=입구→…→입구 거리비용.
+- `action_exec_log(id, cycle_ts, seq, action_type, base_priority, effective_priority, target_id, decision, factors_json, reason, created_at)`
+  - 사이클 내 Action 실행 순서(`seq`)·우선순위(`effective_priority = base_priority + priority_score`)·결과(`SUCCESS`/`ASSIGNED`/`POLICY_BLOCKED`)·사유(`reason`, 차단 시 게이트 사유 포함). §1 우선순위·자원해제 최우선(A단계) 검증용.
+
+의미·계산식은 02 §11.4(자동운영 의사결정), manual §11.3~11.4 참조.

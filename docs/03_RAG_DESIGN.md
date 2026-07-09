@@ -14,6 +14,9 @@ RAG는 추천 근거, 정책, 산식, SOP, 용어 설명을 제공한다. 의사
 | SOP 대응 | 부족하면 어떻게 해? | warehouse_operation_sop.md |
 | 산식 설명 | 소진일은 어떻게 계산해? | scoring_formula.md |
 | 용어 설명 | 출고확정대기가 뭐야? | wms_terms.md |
+| KPI 진단/개선 | Zone 점유율 왜 높아? 어떻게 낮춰? | kpi_policy.md |
+
+RAG를 타는 intent(`RAG_INTENTS`, agent/state.py): `policy_question`, `stocking_recommendation`, `picking_recommendation`, `inventory_risk`, `risk_response_recommendation`, **`kpi_query`, `kpi_advice`**. 그 외 조회형은 Tool 결과만으로 응답(조건부 RAG).
 
 ## 3. 문서 구성
 - stocking_policy.md: 동일 SKU 우선, CAPA, 거리, 고회전 SKU 정책
@@ -22,6 +25,7 @@ RAG는 추천 근거, 정책, 산식, SOP, 용어 설명을 제공한다. 의사
 - warehouse_operation_sop.md: 재고부족, CAPA부족, 출고임박 대응
 - scoring_formula.md: 적치/피킹/Forecast 산식
 - wms_terms.md: WMS 용어
+- **kpi_policy.md: 16개 KPI별 목표·경고기준·원인·개선 SOP**(kpi_query/kpi_advice 근거, FAISS 인덱싱 대상)
 
 ## 4. Chunking 전략
 | 문서 유형 | Chunk 기준 |

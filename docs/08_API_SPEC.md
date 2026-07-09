@@ -137,5 +137,16 @@ Agent 실행 trace 조회.
 - `GET /sessions?user_id=` · `POST /sessions` · `GET /sessions/{id}` · `DELETE /sessions/{id}`
 
 ### 실시간 수요 / 관측
-- `GET /events` (SSE) · `POST /realtime/start|stop|emit` · `GET /realtime/status`
+- `GET /events` (SSE) · `POST /realtime/start|stop|emit` · `GET /realtime/status` · `POST /realtime/config`
 - `GET /traces?limit=` · `GET /traces/{run_id}` — 노드 흐름·RAG 과정
+
+### 자동운영 계산 로그 (2026-07)
+- `GET /blackboard/dispatch-log?limit=` — 작업팀 배정 계산(Dispatch Score)·인수·결정(사이클별)
+- `GET /blackboard/route-log?limit=` — 피킹 ZONE 방문순서(TSP) 계산 결과(AUTO/HITL)
+- `GET /blackboard/exec-log?limit=` — 사이클 내 Action 실행 순서·우선순위(base+조정)·결과·차단 사유
+- (관련) `POST /blackboard/run-once` · `GET /blackboard/capacity` · `GET /blackboard/availability/{sku}`
+
+### 디지털 트윈 / 할 일 (2026-07)
+- `GET /twin/zones` — 존별 보관유형·용량·현재재고·점유율·상위 SKU(트윈 툴팁/색상)
+- `GET /todo` · `GET /todo/{bucket}` · `POST /todo/act` — 일일 할 일 패널(승인/보류)
+- `POST /allocation/apply` · `POST /replenishment/apply` — 조회 결과 바로 적용
