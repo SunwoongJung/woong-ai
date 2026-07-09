@@ -292,14 +292,23 @@ def issue_picking_instruction(draft_id: str) -> dict:
     payload = json.loads(d["payload_json"])
     order_no = payload["order_no"]
     alloc = allocation.apply_allocation(order_no)   # 피킹지시 시 재고 할당 자동 수행(승인 불필요·꼬임방지)
-    ct = calculate_picking_required_time(order_no)
     task_id = f"PCK-{uuid.uuid4().hex[:6]}"
+    # 자동운영과 동일 기준: SKU 재고 존을 TSP closed-route로 방문순서 산출 + 이동/작업시간 계산(타이밍만 즉시 완료)
+    from bb.zone_work import log_route, route_plan
+    skus = [r["sku"] for r in q("SELECT DISTINCT sku FROM outbound_order_lines WHERE order_no=?", (order_no,))]
+    plan = route_plan(skus)                          # 자동운영과 동일한 route_plan 호출
+    seq = plan["zone_sequence"]
+    work_min = plan["work_minutes"]
+    travel_min = plan["travel_minutes"]              # 입구→…→입구 이동시간(수리식 d_ij)
+    total_min = round(work_min + travel_min)
     conn = get_connection()
     try:
-        # HITL 피킹지시는 피킹 완료로 간주(작업 시뮬레이션 없음) → 태스크 완료 + 출고확정 대기 큐 진입
-        conn.execute("INSERT INTO picking_tasks(picking_task_id,order_no,estimated_minutes,status,draft_id,completed_at)"
-                     " VALUES(?,?,?,?,?,?)",
-                     (task_id, order_no, ct["estimated_minutes"], "COMPLETED", draft_id, _NOW()))
+        # 존 단위 실행 로직(TSP 순서·이동·작업시간)을 동기 계산해 즉시 완료 처리 → 출고확정 대기 큐 진입
+        conn.execute("""INSERT INTO picking_tasks(picking_task_id,order_no,estimated_minutes,status,draft_id,
+                        zone_sequence,zone_index,started_at,completed_at)
+                        VALUES(?,?,?,?,?,?,?,?,?)""",
+                     (task_id, order_no, total_min, "COMPLETED", draft_id,
+                      json.dumps(seq), max(0, len(seq) - 1), _NOW(), _NOW()))
         conn.execute("""UPDATE outbound_order_lines
                         SET picked_qty=CASE WHEN allocated_qty>0 THEN allocated_qty ELSE qty END,
                             line_status='PICKED' WHERE order_no=?""", (order_no,))
@@ -308,10 +317,13 @@ def issue_picking_instruction(draft_id: str) -> dict:
                             (order_no,)).fetchone():   # 출고확정 대기 큐 등록(중복 방지)
             conn.execute("INSERT INTO shipping_pending(order_no,ready_datetime,status) VALUES(?,?,'PENDING')",
                          (order_no, _NOW()))
+        log_route(conn, task_id, order_no, "HITL", plan)   # 경로 계산 히스토리(자동과 동일)
         conn.commit()
     finally:
         conn.close()
-    return {"picking_task_id": task_id, "order_status": "SHIPPING_PENDING", "auto_allocation": alloc}
+    return {"picking_task_id": task_id, "order_status": "SHIPPING_PENDING", "zone_sequence": seq,
+            "work_minutes": round(work_min, 1), "travel_minutes": travel_min,
+            "estimated_minutes": total_min, "auto_allocation": alloc}
 
 
 def confirm_shipping(draft_id: str) -> dict:

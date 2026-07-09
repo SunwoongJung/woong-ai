@@ -9,7 +9,7 @@ from datetime import datetime
 from db.database import get_connection
 from tools.common import q
 
-HISTORY_TURNS = 6  # 에이전트에 주입할 최근 대화 턴(메시지) 수
+HISTORY_TURNS = 12  # 에이전트에 주입할 최근 대화 메시지 수(멀티턴 맥락 — 직전 시뮬 결과 등 회상용)
 
 
 def ensure_chat_tables() -> None:

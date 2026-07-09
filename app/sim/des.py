@@ -107,8 +107,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
 
     # --- 시나리오 적용 (What-if) ---
     sc = scenario or {}
-    worker_n = max(0, resources.get("WORKER", 3) + sc.get("worker_delta", 0))
-    forklift_n = max(0, resources.get("FORKLIFT", 2) + sc.get("forklift_delta", 0))
+    worker_n, forklift_n, _ = _apply_counts(sc, resources.get("WORKER", 3), resources.get("FORKLIFT", 2))
     capa_mult = sc.get("zone_capa_multiplier", {})
     for zid in zones:
         zones[zid]["max_capacity"] = int(zones[zid]["max_capacity"] * capa_mult.get(zid, 1.0))
@@ -135,7 +134,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
             "shipping_delays": len(act),
             "delay_cost": dc,
             "picking_wait_avg": 0.0,
-            "zone_max_occ": zone_max_occ,
+            "zone_max_occ": zone_max_occ, "zone_end_occ": dict(zone_max_occ),
             "stockout_day": {},
             "util_team": 0.0,
         }
@@ -151,7 +150,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
     env = simpy.Environment()
     teams = simpy.Resource(env, capacity=team_n)
 
-    metrics = {"picking_waits": [], "shipping_delays": 0, "delay_cost": 0.0, "orders": 0,
+    metrics = {"picking_waits": [], "delay_cost": 0.0, "orders": 0, "orders_due": 0, "on_time": 0,
                "stockout_min": {}, "zone_max_occ": {z: 0.0 for z in zones},
                "team_busy": 0.0, "putaway_delays": 0, "inbound_count": 0}
     events, ts, inv_proj, kpi_daily = [], [], [], []
@@ -188,6 +187,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
         """다중 SKU 라인 주문: 한 번의 피킹 트립(라인 수에 비례) + 1회 패킹."""
         yield env.timeout(arrive)
         t0 = env.now
+        metrics["orders_due"] += 1   # horizon 내 마감이 도래한 출고 대상(정시 못하면 지연)
         # 한 팀이 피킹(라인 수 비례) + 패킹을 수행
         req = teams.request()
         yield req
@@ -210,9 +210,10 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
         yield from work_delay(env, pack_t, metrics)   # 업무시간(09-18)만 작업
         teams.release(req)
         metrics["orders"] += 1
-        if env.now > due_min:
+        if env.now <= due_min:
+            metrics["on_time"] += 1   # 마감 내 출고 완료
+        else:
             w = 10 if any(s in fast_skus for s, _ in lines) else 1  # 고회전 포함 주문 지연비용 10배
-            metrics["shipping_delays"] += 1
             metrics["delay_cost"] += w
             if record:
                 events.append({"sim_time": _sim_label(env.now), "event_type": "SHIPPING_DELAY",
@@ -233,7 +234,7 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
                 cap_so_far = team_n * max(1, day) * WORK_MIN_PER_DAY   # 경과일 기준 누적 가용시간
                 kpi_daily.append({"day": day,
                                   "zone_occupancy": round(sum(occ_vals) / len(occ_vals), 3) if occ_vals else 0.0,
-                                  "shipping_delay_count": metrics["shipping_delays"],
+                                  "shipping_delay_count": metrics["orders_due"] - metrics["on_time"],
                                   "putaway_delay_count": metrics["putaway_delays"],
                                   "resource_utilization_team": round(min(1.0, metrics["team_busy"] / cap_so_far), 3) if cap_so_far else 0.0})
             yield env.timeout(MIN_PER_DAY)
@@ -297,11 +298,13 @@ def _run_once(rep, horizon_days, near_days, scenario, record=False):
     env.run(until=horizon_min)
 
     util_team = metrics["team_busy"] / (team_n * horizon_days * WORK_MIN_PER_DAY)   # 09-18 가용시간 기준
+    zone_end_occ = {z: round(zone_occ[z] / zones[z]["max_capacity"], 3) if zones[z]["max_capacity"] else 0.0
+                    for z in zones}   # 종료시점(마지막 날) 존별 점유율
     out = {
-        "shipping_delays": metrics["shipping_delays"],
+        "shipping_delays": metrics["orders_due"] - metrics["on_time"],   # 늦게 완료 + 미처리(마감 도래) 모두 포함
         "delay_cost": metrics["delay_cost"],
         "picking_wait_avg": statistics.mean(metrics["picking_waits"]) if metrics["picking_waits"] else 0.0,
-        "zone_max_occ": metrics["zone_max_occ"],
+        "zone_max_occ": metrics["zone_max_occ"], "zone_end_occ": zone_end_occ,
         "stockout_day": {s: int(m // MIN_PER_DAY) + 1 for s, m in metrics["stockout_min"].items()},
         "util_team": util_team,
         "putaway_delays": metrics["putaway_delays"],
@@ -315,16 +318,22 @@ def _pctl(vals, p):
     return float(np.percentile(vals, p)) if vals else None
 
 
+def _apply_counts(sc, base_w, base_f):
+    """시나리오의 절대값(worker_count/forklift_count) 우선, 없으면 증감(delta) 적용. → (작업자, 지게차, 팀)."""
+    sc = sc or {}
+    w = sc["worker_count"] if sc.get("worker_count") is not None else base_w + sc.get("worker_delta", 0)
+    f = sc["forklift_count"] if sc.get("forklift_count") is not None else base_f + sc.get("forklift_delta", 0)
+    w, f = max(0, int(w)), max(0, int(f))
+    return w, f, min(w // 2, f)   # 팀 = 작업자//2 와 지게차 중 작은 값
+
+
 def _resolved_counts(scenario):
     """시나리오 적용 후 실제 작업자/지게차/팀 수."""
     ensure_resource_rows_schema()
     res = {r["resource_type"]: r["count"] for r in q("""SELECT resource_type, COUNT(*) count
                                                        FROM resources WHERE active_flag=1
                                                        GROUP BY resource_type""")}
-    sc = scenario or {}
-    w = max(0, res.get("WORKER", 3) + sc.get("worker_delta", 0))
-    f = max(0, res.get("FORKLIFT", 2) + sc.get("forklift_delta", 0))
-    return w, f, min(w // 2, f)
+    return _apply_counts(scenario, res.get("WORKER", 3), res.get("FORKLIFT", 2))
 
 
 def run_des_simulation(horizon_days: int = 14, near_future_days: int | None = None,
@@ -380,12 +389,12 @@ def run_des_simulation(horizon_days: int = 14, near_future_days: int | None = No
 
     # --- KPI 대시보드 카드 통일: 파생(시나리오 반영) + 정적(현재 실데이터) 지표 ---
     if zones:
-        zt = 0.80
-        zmeans = [statistics.mean([r["zone_max_occ"][z] for r in runs]) for z in zones]
-        zp90 = [_pctl([r["zone_max_occ"][z] for r in runs], 90) for z in zones]
-        kpis.append({"kpi_name": "zone_occupancy", "mean": round(statistics.mean(zmeans), 3),
+        zt = 0.80   # 종료시점(마지막 날) 존 점유율 기준 — peak 아님(시나리오 효과 반영)
+        zend = [statistics.mean([r["zone_end_occ"][z] for r in runs]) for z in zones]
+        zp90 = [_pctl([r["zone_end_occ"][z] for r in runs], 90) for z in zones]
+        kpis.append({"kpi_name": "zone_occupancy", "mean": round(statistics.mean(zend), 3),
                      "p90": round(statistics.mean(zp90), 3), "unit": "percent"})
-        over = [sum(1 for z in zones if r["zone_max_occ"][z] > zt) for r in runs]
+        over = [sum(1 for z in zones if r["zone_end_occ"][z] > zt) for r in runs]
         kpis.append({"kpi_name": "zone_over_target_count", "mean": round(statistics.mean(over), 2),
                      "p90": _pctl(over, 90), "unit": "count"})
     from tools import kpi_dashboard as _kd   # 정적 지표(수요 기반·시나리오 무관)는 현재 실데이터 값

@@ -6,7 +6,7 @@ run_once(): 1 사이클(테스트 가능). run_forever(): 별도 스레드에서
 import threading
 import time
 
-from bb import actions, audit, backorder, events, executor, settings, simulation_agent, zone_scheduler
+from bb import actions, audit, backorder, events, exec_log, executor, settings, simulation_agent, zone_scheduler
 from bb.agents import REGISTRY
 from bb.store import ensure_schema, now
 
@@ -39,6 +39,17 @@ def _gate_block(action_type: str, payload: dict, g: dict):
     return None
 
 
+# ---------- Action 실행 우선순위(§1) ----------
+def _action_type_priority(action_type: str) -> float:
+    """action_type별 base 우선순위(actions.BASE_PRIORITY). 표에 없으면 기본값."""
+    return actions.type_priority(action_type)
+
+
+def _effective_priority(spec: dict) -> float:
+    """base + spec.priority_score. spec에 priority_score가 없으면 base만."""
+    return _action_type_priority(spec["action_type"]) + float(spec.get("priority_score") or 0)
+
+
 def run_once(force: bool = False, step_delay: float | None = None) -> dict:
     """1 사이클: NEW 이벤트 → 에이전트 propose → Action 생성·실행. 실행 중 발생한 체인 이벤트
     (NEED_PUTAWAY·TASK_CREATED)도 같은 사이클에서 소진(budget·pass 상한).
@@ -67,7 +78,8 @@ def run_once(force: bool = False, step_delay: float | None = None) -> dict:
                       message="시뮬레이션 워밍업 — 첫 배치 시뮬 완료까지 자동처리 대기")
             return out
     out["simulation"] = sim_gate
-    out["zone_scheduler"] = zone_scheduler.advance()   # 매 사이클: zone 작업 완료/전진 + 대기 작업 시작
+    exec_log.begin(now())   # 실행 순서 트레이스 시작 — advance()·도메인 action을 한 사이클 순서로 기록
+    out["zone_scheduler"] = zone_scheduler.advance()   # 매 사이클: 완료(자원해제)→시작→팀배정
     # 발주 리드타임 경과분 입고 도착 + 재고 채워진 백오더 재개
     out["arrived"] = backorder.arrive_due_replenishments()
     out["resumed"] = backorder.resume_fillable()
@@ -78,42 +90,60 @@ def run_once(force: bool = False, step_delay: float | None = None) -> dict:
         evs = events.new_events(limit=budget)
         if not evs:
             break
+        # 이벤트 순서(severity+시각)는 수집에만 유지 — 실행은 action effective_priority 순(§1)
         for ev in evs:
-            if budget <= 0:
-                break
             events.set_status(ev["event_id"], "PROCESSING")
             audit.log("EVENT_RECEIVED", "OK", event_id=ev["event_id"], message=ev["event_type"])
+        cands, remaining = [], {}   # (spec, event_id) 후보 + 이벤트별 미시도 수(예산 부족 시 되돌림용)
+        for ev in evs:
             for agent in REGISTRY:
                 if not agent.handles(ev["event_type"]):
                     continue
                 for spec in agent.propose(ev):
-                    res = actions.create(**spec)
-                    out["created"].append({"action_id": res.get("action_id"), "status": res["status"],
-                                           "agent": spec["agent_name"], "type": spec["action_type"]})
-                    if res["status"] == "PENDING":
-                        audit.log("ACTION_CREATED", "OK", action_id=res["action_id"], event_id=ev["event_id"],
-                                  agent_name=spec["agent_name"], action_type=spec["action_type"],
-                                  message=spec.get("reason"))
-                        block = _gate_block(spec["action_type"], spec.get("payload") or {}, sim_gate)
-                        if block:
-                            actions.update(res["action_id"], status="POLICY_BLOCKED",
-                                           reason=f"배치 시뮬 차단: {block}", finished_at=now())
-                            audit.log("POLICY_CHECK", "BLOCKED", action_id=res["action_id"], event_id=ev["event_id"],
-                                      agent_name=spec["agent_name"], action_type=spec["action_type"],
-                                      message=f"시뮬 게이트: {block}")
-                            out["executed"].append({"action_id": res["action_id"], "agent": spec["agent_name"],
-                                                    "type": spec["action_type"], "status": "POLICY_BLOCKED",
-                                                    "reason": block})
-                        else:
-                            r = executor.execute(res["action_id"])
-                            out["executed"].append({"action_id": res["action_id"], "agent": spec["agent_name"],
-                                                    "type": spec["action_type"], "status": r.get("status"),
-                                                    "reason": r.get("reason")})
-                        budget -= 1
-                        if step_delay > 0:
-                            time.sleep(step_delay)   # 한 건씩 가시화(사람이 흐름을 볼 수 있게)
-            events.set_status(ev["event_id"], "PROCESSED")
-            out["events"] += 1
+                    cands.append((spec, ev["event_id"]))
+                    remaining[ev["event_id"]] = remaining.get(ev["event_id"], 0) + 1
+        cands.sort(key=lambda c: (-_effective_priority(c[0]),
+                                  str(c[0].get("idempotency_key") or c[0].get("target_id") or "")))
+        for spec, eid in cands:
+            if budget <= 0:
+                break
+            res = actions.create(**spec)
+            out["created"].append({"action_id": res.get("action_id"), "status": res["status"],
+                                   "agent": spec["agent_name"], "type": spec["action_type"]})
+            remaining[eid] -= 1
+            if res["status"] == "PENDING":
+                audit.log("ACTION_CREATED", "OK", action_id=res["action_id"], event_id=eid,
+                          agent_name=spec["agent_name"], action_type=spec["action_type"],
+                          message=spec.get("reason"))
+                base, eff = _action_type_priority(spec["action_type"]), _effective_priority(spec)
+                tgt = spec.get("target_id") or ""
+                block = _gate_block(spec["action_type"], spec.get("payload") or {}, sim_gate)
+                if block:
+                    actions.update(res["action_id"], status="POLICY_BLOCKED",
+                                   reason=f"배치 시뮬 차단: {block}", finished_at=now())
+                    audit.log("POLICY_CHECK", "BLOCKED", action_id=res["action_id"], event_id=eid,
+                              agent_name=spec["agent_name"], action_type=spec["action_type"],
+                              message=f"시뮬 게이트: {block}")
+                    out["executed"].append({"action_id": res["action_id"], "agent": spec["agent_name"],
+                                            "type": spec["action_type"], "status": "POLICY_BLOCKED",
+                                            "reason": block})
+                    exec_log.record(spec["action_type"], base, eff, tgt, "POLICY_BLOCKED",
+                                    reason=f"{spec.get('reason') or ''} — [차단] {block}")
+                else:
+                    r = executor.execute(res["action_id"])
+                    out["executed"].append({"action_id": res["action_id"], "agent": spec["agent_name"],
+                                            "type": spec["action_type"], "status": r.get("status"),
+                                            "reason": r.get("reason")})
+                    exec_log.record(spec["action_type"], base, eff, tgt, str(r.get("status")), reason=spec.get("reason"))
+                budget -= 1
+                if step_delay > 0:
+                    time.sleep(step_delay)   # 한 건씩 가시화(사람이 흐름을 볼 수 있게)
+        for ev in evs:   # 모든 후보 시도됨 → PROCESSED, 예산부족으로 남으면 NEW로 되돌려 다음 사이클 재시도
+            if remaining.get(ev["event_id"], 0) <= 0:
+                events.set_status(ev["event_id"], "PROCESSED"); out["events"] += 1
+            else:
+                events.set_status(ev["event_id"], "NEW")
+    exec_log.flush()   # 이번 사이클 실행 순서 확정 기록(빈 사이클은 무기록)
     return out
 
 
@@ -123,8 +153,7 @@ _running = False
 
 
 def _loop():
-    global _running
-    while _running:
+    while _running:   # _running은 start()/stop()에서만 갱신 — 여기선 읽기만 하므로 global 선언 불필요
         try:
             if settings.enabled():
                 run_once()

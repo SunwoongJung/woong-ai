@@ -96,8 +96,12 @@
                 <span><i class="dot mv"></i>이동</span>
                 <span><i class="dot pk"></i>📥 적치</span><span><i class="dot pc"></i>🛒 피킹</span>
                 <span><i class="dot id"></i>유휴</span><span class="sep">|</span>
+                <span><i class="occ-band" style="background:#2fae5f"></i>여유</span>
+                <span><i class="occ-band" style="background:#e8a13a"></i>주의</span>
+                <span><i class="occ-band" style="background:#e1483b"></i>포화 ⚠</span><span class="sep">|</span>
                 <span class="cold-leg">❄ 냉장 존</span><span class="sep">|</span>
-                <span class="occ-scale">점유율 낮음<i class="occ-bar"></i>높음</span>
+                <span>작업 중 존 <b style="color:#028090">▲적치</b>·<b style="color:#f0a13a">▼피킹</b> 점유율 실시간 변동</span>
+                <span>┈ 목표선 · 존 위 마우스로 상세</span>
               </div>
             </div>
           </div>
@@ -294,6 +298,26 @@
           <div class="card panel-min">
             <div class="panel-head">💬 단계 설명 <span class="head-sub">생애주기 단계를 클릭하면 그 의사결정 사유(LLM)</span></div>
             <div class="panel-body"><div class="auto-detail" id="auto-detail">위 ‘선택 요청 생애주기’에서 단계를 클릭하세요.</div></div>
+          </div>
+        </div>
+
+        <div class="card panel-min">
+          <div class="panel-head">🧮 작업 배정 계산 로그 <span class="head-sub">dispatch_score 휴리스틱 — 팀이 배정된 순간의 후보 순위·점수·사유</span></div>
+          <div class="panel-body"><div class="dispatch-log" id="dispatch-log">자동운영 중 팀이 배정되면 계산 이력이 쌓입니다.</div></div>
+        </div>
+
+        <div class="card panel-min">
+          <div class="panel-head">🧭 ZONE 방문순서 계산 로그 <span class="head-sub">피킹 TSP closed-route — 자동/지시 공통 방문순서·이동/작업시간</span></div>
+          <div class="panel-body"><div class="route-log" id="route-log">피킹 작업이 발행/지시되면 방문순서 계산 이력이 쌓입니다.</div></div>
+        </div>
+
+        <div class="card panel-min">
+          <div class="panel-head">⚙️ 액션 실행 순서 로그 <span class="head-sub">사이클별 A단계(작업 진행·자원해제 최우선) → B단계(신규 편성·우선순위 경합) 구분 · 우측에서 판단 사유 설명</span></div>
+          <div class="panel-body">
+            <div class="el-split">
+              <div class="exec-log" id="exec-log">자동운영 사이클에서 액션이 실행되면 실행 순서대로 기록됩니다.</div>
+              <div class="el-chat" id="exec-explain"><div class="el-chat-empty">💬 왼쪽 로그의 사이클을 클릭하면, 각 작업의 우선순위 근거와 차단 사유를 풀어서 설명합니다.</div></div>
+            </div>
           </div>
         </div>
       </section>

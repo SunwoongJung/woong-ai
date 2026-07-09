@@ -1,0 +1,268 @@
+@page {
+  size: A4;
+  margin: 18mm 16mm 18mm 16mm;
+}
+
+:root {
+  --ink: #172033;
+  --muted: #5f697a;
+  --line: #d8dde6;
+  --soft: #f5f7fa;
+  --head: #0f172a;
+  --accent: #1f6feb;
+  --table-head: #eef3fb;
+  --code-bg: #f3f5f8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.62;
+  letter-spacing: 0;
+  background: white;
+}
+
+main {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 28px 34px 56px;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--head);
+  line-height: 1.28;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1 {
+  margin: 34px 0 18px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--head);
+  font-size: 22pt;
+}
+
+h1:first-child {
+  margin-top: 0;
+  padding-top: 28px;
+  border-bottom: 0;
+  font-size: 28pt;
+}
+
+h1:first-child + h2 {
+  margin: 4px 0 18px;
+  color: var(--accent);
+  font-size: 16.5pt;
+  font-weight: 800;
+  line-height: 1.25;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1:first-child + h2 + figure {
+  margin: 10px 0 26px;
+}
+
+h1:first-child + h2 + figure img {
+  max-height: 112mm;
+  border: 0;
+  border-radius: 10px;
+}
+
+h1:first-child + h2 + figure figcaption {
+  display: none;
+}
+
+h2 {
+  margin: 26px 0 12px;
+  font-size: 15.5pt;
+}
+
+h3 {
+  margin: 20px 0 8px;
+  font-size: 12.5pt;
+}
+
+h4 {
+  margin: 16px 0 6px;
+  font-size: 11pt;
+}
+
+p {
+  margin: 8px 0 10px;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+table {
+  width: 100%;
+  margin: 11px 0 18px;
+  border-collapse: collapse;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  font-size: 9.4pt;
+}
+
+th,
+td {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  color: var(--head);
+  background: var(--table-head);
+  font-weight: 700;
+}
+
+tr:nth-child(even) td {
+  background: #fbfcfe;
+}
+
+ul,
+ol {
+  margin: 8px 0 14px 24px;
+  padding: 0;
+}
+
+li {
+  margin: 3px 0;
+}
+
+code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--code-bg);
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 0.92em;
+}
+
+pre {
+  margin: 10px 0 16px;
+  padding: 11px 13px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--code-bg);
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+pre code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 9pt;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+blockquote {
+  margin: 12px 0;
+  padding: 8px 13px;
+  border-left: 4px solid var(--accent);
+  background: var(--soft);
+  color: var(--muted);
+}
+
+figure {
+  margin: 14px 0 22px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+figure img {
+  display: block;
+  width: 100%;
+  max-height: 174mm;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+}
+
+figcaption {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 9pt;
+  text-align: center;
+}
+
+hr {
+  margin: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.subtitle {
+  margin: -12px 0 24px;
+  color: var(--muted);
+  font-size: 12pt;
+}
+
+.doc-meta {
+  margin-bottom: 24px;
+}
+
+.chapter {
+  page-break-before: always;
+  break-before: page;
+}
+
+.chapter:first-of-type {
+  page-break-before: auto;
+  break-before: auto;
+}
+
+.toc-table td:first-child,
+.toc-table th:first-child {
+  width: 48px;
+  text-align: right;
+}
+
+@media screen {
+  body {
+    background: #e9edf3;
+  }
+
+  main {
+    min-height: 100vh;
+    background: white;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+  }
+}
+
+@media print {
+  main {
+    max-width: none;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  h1 {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  h1:first-child {
+    page-break-before: auto;
+    break-before: auto;
+  }
+
+  a {
+    color: inherit;
+  }
+}

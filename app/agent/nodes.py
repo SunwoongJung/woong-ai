@@ -57,10 +57,23 @@ def router_node(state: dict) -> dict:
         "'무엇 때문인지', '개선 방법'을 물으면. 현재값이 아니라 원인·개선책을 원하는 질의다. "
         "예: \"zone A 점유율 어떻게 낮춰?\", \"가동률이 왜 100%야?\", \"출고지연 개선 방법\", \"적치지연 줄이려면?\". "
         "parameters.kpis(표준키)와 특정 존이면 zone_id를 채운다. 대상 KPI가 불명확하면 비워 전체 진단.\n"
-        "- simulation_query: 창고상황 예측·What-if. 예: \"이번 주 예측\", \"작업자 1명 늘리면?\"\n"
+        "- simulation_query: 창고상황 예측·What-if. 예: \"이번 주 예측\", \"작업자 1명 늘리면?\". "
+        "'시뮬레이션 가능한 수정요소/조건/파라미터가 뭐야'처럼 바꿀 수 있는 항목을 물으면 parameters.mode='options'"
+        "(시뮬 실행 없이 목록 답변). 실행 지시면 parameters.scenario에 언급된 키만 채운다. 작업자/지게차는 두 방식 구분: "
+        "'~로 설정/~명으로/~로 맞춰' 같은 절대값이면 worker_count·forklift_count(정수), "
+        "'~명 늘려/증원/줄여' 같은 증감이면 worker_delta·forklift_delta(정수). "
+        "그 외 키: demand_multiplier(실수), inbound_delay_days(정수), zone_capa_multiplier({존:배수}). "
+        "예: \"작업자수를 4로 설정\" → scenario={\"worker_count\":4}; \"작업자 3명 늘려\" → scenario={\"worker_delta\":3}. "
+        "작업자수와 작업팀은 다름(작업팀=작업자//2와 지게차 중 작은 값)이니 사용자가 말한 대상을 그대로 반영한다. "
+        "직전에 시뮬레이션 결과(KPI 증감)를 답한 뒤, 사용자가 그 결과에 대해 (a)원인('왜 늘어/줄어/이렇게 나와') 또는 "
+        "(b)회상·과거형('아까/방금/이전에 ~ 어떻게 변했었지/얼마였지/어땠어')을 물으면 parameters.mode='explain'로 분류한다. "
+        "explain은 시뮬을 재실행하지 않고 직전 대화의 수치를 회상해 답하는 것이다(새 시뮬 실행 아님, 현재상태 kpi_advice도 아님). "
+        "'아까 ~ 시뮬 다시 돌려'처럼 명시적 재실행 요청일 때만 scenario로 실제 실행한다.\n"
         "- workload_estimate: 적치·피킹·출고확정의 '완료 예상시간·소요시간·작업량', 가용 작업팀 수, "
         "'오늘 다 끝낼 수 있는지'. 예: \"적치대기 완료 예상시간\", \"피킹 얼마나 걸려\", \"오늘 물량 다 처리 가능?\", "
-        "\"가용 작업팀 몇 조야?\". parameters.scope에 영역을 넣는다(stocking|picking|shipping|all).\n"
+        "\"가용 작업팀 몇 조야?\". parameters.scope에 영역을 넣는다(stocking|picking|shipping|all). "
+        "단, 작업량·완료시간이 아니라 '작업팀/작업자/지게차가 몇 개·몇 명·몇 대인지' 단순 수량만 물으면 "
+        "parameters.mode='capacity'로 채운다(예: \"작업팀 수 몇개야\", \"작업자 몇 명이야\").\n"
         "- daily_summary: \"오늘 뭐 해야 돼?\" 류 종합. 특정 영역만 요약/정리 요청도 daily_summary로 분류하고 "
         "parameters.scope에 영역을 넣는다(all|inbound|outbound|picking|risk|shipping). "
         "예: \"입고 업무만 요약\"·\"적치대기만 정리\"→scope=inbound, \"출고만 정리\"→scope=outbound, "
@@ -102,15 +115,15 @@ def router_node(state: dict) -> dict:
         "인사·감사·이름·기억 요청은 smalltalk(업무 목록을 나열하지 말 것).\n"
         "이전 대화가 제공되면 대명사·생략(그 주문, 거기, 그거 등)을 직전 맥락으로 해소해 "
         "parameters(order_no·sku 등)를 채운다.\n"
-        "parameters 키(있을 때만): sku, inbound_no, order_no, location_id, zone_id, target_date, kpis, scenario, scope, qty, orders. "
+        "parameters 키(있을 때만): sku, inbound_no, order_no, location_id, zone_id, target_date, kpis, scenario, scope, qty, orders, mode. "
         "zone_id는 'ZONE_A'처럼 채운다.\n"
         '형식: {"intent":..,"confidence":0~1,"parameters":{..}}'
     )
     hist = state.get("history") or []
     prefix = ""
     if hist:
-        lines = "\n".join(f"{'사용자' if h['role'] == 'user' else '조수'}: {str(h['content'])[:200]}"
-                          for h in hist[-6:])
+        lines = "\n".join(f"{'사용자' if h['role'] == 'user' else '조수'}: {str(h['content'])[:240]}"
+                          for h in hist[-10:])
         prefix = f"[이전 대화]\n{lines}\n\n[현재 질문]\n"
     j = _json_chat(system, prefix + state["user_query"], settings.openai_router_model, node="Router")
     return {"intent": j.get("intent"), "intent_confidence": j.get("confidence"),
@@ -261,14 +274,72 @@ def _h_kpi_advice(p):
                                 targets=dashboard_settings.get_all())
 
 
+# 시뮬 KPI 요약 대상(카드와 동일 핵심 4종) — (kpi_name, 라벨, 배수, 단위)
+_SIM_CORE_KPIS = [("zone_occupancy", "Zone 점유율", 100, "%"),
+                  ("resource_utilization_team", "작업팀 가동률", 100, "%"),
+                  ("shipping_delay_count", "출고지연", 1, "건"),
+                  ("putaway_delay_count", "적치지연", 1, "건")]
+
+
+def _sim_kpi_values(res):
+    out = []
+    for name, label, scale, unit in _SIM_CORE_KPIS:
+        k = next((x for x in res["kpis"] if x["kpi_name"] == name), {})
+        v = k.get("mean")
+        out.append({"kpi": label, "value": round(v * scale, 1) if v is not None else None, "unit": unit})
+    return out
+
+
 def _h_simulation(p):
+    import resmgmt
+    if p.get("mode") == "options":   # 시뮬 실행 없이 수정 가능 요소 안내
+        r = resmgmt.get_resources()
+        return {"simulation_options": {
+                    "worker_delta": "작업자 증감(명) — 예: +3",
+                    "forklift_delta": "지게차 증감(대)",
+                    "demand_multiplier": "수요 배수 — 예: 1.3(30% 증가)",
+                    "inbound_delay_days": "입고 지연(일)",
+                    "zone_capa_multiplier": "존 용량 배수 — 예: {\"ZONE_A\": 0.8}",
+                    "horizon_days": "시뮬레이션 기간(기본 7일)",
+                    "replications": "반복 횟수(기본 10회)"},
+                "current_resources": {"작업자": r["worker"], "지게차": r["forklift"],
+                                      "팀": max(0, min(r["worker"] // 2, r["forklift"]))},
+                "note": "팀 = 작업자2 + 지게차1. 증감 실행 예: '작업자 3명 늘려서 시뮬레이션 돌려줘'"}
+
+    if p.get("mode") == "explain":   # 직전 시뮬 결과의 KPI 증감 원인 설명(재실행 없음)
+        return {"simulation_model_facts": {
+                    "팀 배정": "입고(적치)·출고(피킹)가 같은 팀 풀을 선착순(FIFO)으로 공유. 우선순위 없음. 팀=작업자2+지게차1.",
+                    "출고지연": "마감이 도래한 출고 중 정시 출고 못한 건수(늦게 완료 + horizon 내 미처리 모두 포함). 팀↑→처리가 빨라져 정시가 늘고 지연 감소.",
+                    "적치지연": "입고 당일 적치를 못 끝낸 건수. 적치 물량은 출고보다 작아, 여유 용량이 생기면 쉽게 0에 수렴.",
+                    "피킹 대기시간": "주문이 팀을 얻기까지의 큐 대기. 팀↑→병목 완화로 급감.",
+                    "가동률": "대기 물량이 팀 용량을 넘으면 100%(포화). 팀↑→여유가 생겨 하락.",
+                    "한계": "백로그가 팀 용량을 여전히 초과하면 팀을 늘려도 마감 넘긴 주문이 남을 수 있음(완전 해소는 아님)."},
+                "note": "직전 시뮬 결과(대화 맥락)의 실제 수치와 함께 각 KPI가 왜 오르내렸는지 설명할 것"}
+
     sc = p.get("scenario")
     if sc:
-        base = des.run_des_simulation(horizon_days=7, replications=40)
-        scen = whatif.simulate_operation_what_if(sc, horizon_days=7, replications=40)
-        return {"baseline": base, "scenario": scen,
-                "comparison": whatif.compare_simulation_scenarios(base, scen)["comparison"]}
-    return {"baseline": des.run_des_simulation(horizon_days=7, replications=40)}
+        r = resmgmt.get_resources()
+        cw, cf, ct = des._apply_counts({}, r["worker"], r["forklift"])      # 현재 자원
+        nw, nf, nt = des._apply_counts(sc, r["worker"], r["forklift"])      # 시나리오 적용 후
+        base = des.run_des_simulation(horizon_days=7, replications=10, persist=False)  # 비교용(저장 baseline 유지)
+        scen = whatif.simulate_operation_what_if(sc, horizon_days=7, replications=10)  # What-if은 저장(시뮬 탭 비교 가능)
+        cmp = whatif.compare_simulation_scenarios(base, scen)["comparison"]
+        rows = []
+        for name, label, scale, unit in _SIM_CORE_KPIS:   # KPI 기준 증감(현재기준→What-if)
+            row = next((c for c in cmp if c["kpi_name"] == name and c.get("baseline_mean") is not None), None)
+            if row:
+                rows.append({"kpi": label, "unit": unit,
+                             "현재기준": round(row["baseline_mean"] * scale, 1),
+                             "whatif": round(row["scenario_mean"] * scale, 1),
+                             "증감": round(row["delta_mean"] * scale, 1)})
+        return {"run_conditions": {"현재": {"작업자": cw, "지게차": cf, "작업팀": ct},
+                                   "적용": {"작업자": nw, "지게차": nf, "작업팀": nt}},
+                "kpi_comparison": rows, "whatif_version": scen.get("version_name"),
+                "note": "시뮬레이션 탭 '비교 What-if'에서 이 버전을 선택하면 일별 추이로도 볼 수 있음"}
+
+    base = des.run_des_simulation(horizon_days=7, replications=10, persist=False)
+    return {"kpi_current_forecast": _sim_kpi_values(base),
+            "note": "현재 자원 기준 7일 시뮬레이션의 KPI 예측(핵심 4종)"}
 
 
 def _h_inbound_query(p):
@@ -318,6 +389,10 @@ def _h_replenishment_query(p):
 
 def _h_workload_estimate(p):
     from tools import workload
+    if p.get("mode") == "capacity":   # 단순 팀/작업자/지게차 수 질문 — 작업량 리포트 대신 팀 수만
+        cap = workload.team_capacity()
+        return {"team_capacity": cap,
+                "note": "팀 = 작업자2 + 지게차1. 남는 작업자·지게차는 조 편성 불가."}
     return workload.estimate_workload(scope=p.get("scope") or "all", current_datetime=_current_dt())
 
 
@@ -430,6 +505,19 @@ _PERSONA = (
     "③구체적 개선 레버(recommendations를 그대로 근거로) 순으로, 산수(재고일수·필요 팀수 등)를 포함해 설명합니다. "
     "recommendations에 없는 조치를 지어내지 말고 제공된 수치를 인용합니다. "
     "핵심 4개 KPI는 진단의 recommendations를, 그 외 보조지표는 current(현재값)와 KPI 정책문서(kpi_policy)의 개선 SOP를 근거로 답합니다.\n"
+    "작업팀/작업자/지게차 수(team_capacity)를 물으면 작업량 리포트를 붙이지 말고 '현재 작업팀 N개(전체/사용중/가용), "
+    "작업자 X명·지게차 Y대'를 바로 간결히 답합니다(팀=작업자2+지게차1).\n"
+    "시뮬레이션 What-if 결과는 먼저 run_conditions로 기동 조건을 명시합니다"
+    "(예: '작업자 4명·지게차 2대 = 작업팀 2개로 시뮬레이션을 실행했습니다. 현재는 작업자3·지게차2=팀1'). "
+    "작업자수·지게차·작업팀은 각각 다른 개념(작업팀=작업자//2와 지게차 중 작은 값)이니 혼동하지 말고 구분해 씁니다. "
+    "그 다음 kpi_comparison을 반드시 마크다운 표로 출력합니다(열: KPI | 현재기준 | What-if | 증감). "
+    "끝에 whatif_version과 note(시뮬레이션 탭에서 일별 추이 확인)를 안내합니다. "
+    "시뮬 원인 설명(simulation_model_facts)이 오면, 직전 대화의 시뮬 수치(증감)와 이 모델 사실을 결합해 "
+    "각 KPI가 왜 늘고 줄었는지 인과로 설명합니다(팀 배정은 FIFO·우선순위 없음, 적치지연 감소는 용량효과·작은 물량 때문, "
+    "백로그가 용량 초과면 완전 해소 안 됨 등). 현재상태 진단으로 흐르지 말고 직전 시뮬 결과에 한정해 답합니다. "
+    "사용자가 특정 KPI(예: 적치지연)를 지목해 회상을 물으면 그 KPI의 값·증감을 결론 첫머리에 먼저 답하고 다른 KPI로 흐르지 않습니다. "
+    "단, 회상 대상 시뮬레이션 결과(해당 조건·KPI 수치)가 이전 대화에 없으면 지어내지 말고 "
+    "'직전 대화에서 해당 시뮬레이션 결과를 찾지 못했습니다. 지금 그 조건으로 시뮬레이션을 기동할까요?'라고 되묻습니다.\n"
     "KPI/부가지표 값 조회(kpi_query)는 '현재값 + 목표치 + 초과/미달'만 간결히 제시합니다(각 지표를 나열). "
     "묻지 않은 개선책·권고·경고 SOP·원인 분석은 덧붙이지 않습니다(개선은 사용자가 '어떻게 개선?'을 물을 때 kpi_advice가 답함). "
     "targets 값이 None인 지표(재고금액 등)는 '고정 목표 없는 참고 지표'로 표기하고 초과/미달을 단정하지 않습니다. "
@@ -464,9 +552,7 @@ def response_generator_node(state: dict) -> dict:
                         model=settings.openai_chat_model, node="Response Generator")
         return {"final_response": resp.choices[0].message.content}
     tr = state.get("tool_results", {}) or {}
-    context = {"intent": state.get("intent"), "tool_results": tr,
-               "rag_evidence": state.get("rag_context", []),
-               "recent_dialogue": (state.get("history") or [])[-6:]}
+    dialogue = (state.get("history") or [])[-12:]     # 멀티턴 회상용(직전 시뮬 결과 등)
     scope = tr.get("_scope")
     scope_note = ""
     if state.get("intent") == "daily_summary" and scope and scope != "all":
@@ -474,8 +560,14 @@ def response_generator_node(state: dict) -> dict:
                   "risk": "재고위험", "shipping": "출고확정대기"}
         scope_note = (f"[요약 범위] 이번 답변은 '{labels.get(scope, scope)}' 영역만 다루세요. "
                       "그 외 영역(피킹·출고·재고위험 등)은 언급하지 마세요.\n")
-    user = (scope_note + "아래 Tool 결과와 RAG 근거를 바탕으로 운영자에게 답하세요. JSON 아님, 자연어.\n"
-            + json.dumps(context, ensure_ascii=False, default=str)[:9000])
+    # 대화는 상단에 전용 예산으로 항상 포함(잘려나가지 않게), Tool/RAG는 그 다음
+    dlg_json = json.dumps(dialogue, ensure_ascii=False, default=str)[:6000]
+    core_json = json.dumps({"intent": state.get("intent"), "tool_results": tr,
+                            "rag_evidence": state.get("rag_context", [])},
+                           ensure_ascii=False, default=str)[:7000]
+    user = (scope_note + "아래 [이전 대화]와 [Tool/RAG]를 바탕으로 답하세요. JSON 아님, 자연어. "
+            "이전 대화에 이미 나온 수치(예: 직전 시뮬레이션 결과의 특정 KPI 값·증감)를 물으면 그 값을 그대로 회상해 인용하고, "
+            "질문한 대상 KPI를 정확히 골라 답합니다.\n[이전 대화]\n" + dlg_json + "\n[Tool/RAG]\n" + core_json)
     resp = complete([{"role": "system", "content": _PERSONA}, {"role": "user", "content": user}],
                     model=settings.openai_chat_model, node="Response Generator")
     return {"final_response": resp.choices[0].message.content}

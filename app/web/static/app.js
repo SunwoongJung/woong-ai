@@ -27,7 +27,7 @@ const KPI_META = {
   zone_max_occupancy: { label: "Zone 최대 점유율", desc: "시뮬레이션 중 각 Zone이 도달한 최대 점유율", unit: "%" },
   expected_stockout_date: { label: "예상 재고 소진일", desc: "시뮬레이션상 특정 SKU 재고가 소진될 것으로 예상되는 날짜", unit: "일자" },
 };
-const DATASET_ORDER = ["snapshot", "products", "zones", "locations", "inventory", "inbound_orders", "outbound_orders", "outbound_order_lines", "shipping_pending", "stocking_tasks", "picking_tasks", "resources", "process_time_params", "demand_history", "action_drafts", "simulation_runs", "simulation_kpis", "simulation_events"];
+const DATASET_ORDER = ["snapshot", "products", "zones", "locations", "inventory", "inbound_orders", "outbound_orders", "outbound_order_lines", "shipping_pending", "stocking_tasks", "picking_tasks", "resources", "process_time_params", "demand_history", "action_drafts", "dispatch_scores", "zone_routes", "action_exec_log", "simulation_runs", "simulation_kpis", "simulation_events"];
 const DATASET_META = {
   snapshot: ["현재 스냅샷", "현재 창고 상태를 집계한 요약"],
   products: ["상품 마스터", "SKU별 상품명, 카테고리, 보관유형, 안전재고 등 기준 정보"],
@@ -43,6 +43,9 @@ const DATASET_META = {
   resources: ["작업 리소스", "작업자, 지게차 개별 ID와 활성 상태"],
   process_time_params: ["공정 시간 파라미터", "입고, 적치, 피킹, 포장/출고 단계별 시간 분포 파라미터"],
   demand_history: ["수요 이력", "SKU별 과거 출고 수요량"],
+  dispatch_scores: ["작업 배정 계산 히스토리", "dispatch_score 휴리스틱 — 사이클별 후보 점수·인수·배정 결정"],
+  zone_routes: ["ZONE 방문순서 계산 히스토리", "피킹 TSP closed-route — 방문존·최적순서·이동/작업시간(AUTO/HITL)"],
+  action_exec_log: ["액션 실행 순서 로그", "사이클별 실행순(seq)·우선순위·결과 — 자원해제 최우선·priority 실행 검증"],
   action_drafts: ["승인 Draft", "승인 대기/승인/거부된 상태변경 후보 작업"],
   simulation_runs: ["시뮬레이션 실행 이력", "실행 버전, baseline/what-if 유형, 조건, 생성시각"],
   simulation_kpis: ["시뮬레이션 KPI 원장", "시뮬레이션 실행별 KPI 산출값"],
@@ -462,7 +465,7 @@ async function renderAll(result, comparison) {
   renderKpiDashboard();
   renderInsight();
   renderTwin(result.movement, result.zone_occupancy_timeseries);   // 트윈 = 표시 버전
-  renderTimeline(result.bottleneck_events);                        // 타임라인 = 같은 버전의 이벤트
+  renderTimeline(result.bottleneck_events, result.params);         // 타임라인 = 같은 버전의 이벤트(리소스 기준 포함)
   const cmpName = $("#ver-compare").value;
   $("#version-badge").textContent = `현재 기준 (반영 ${fmtTs(BASELINE_VER && BASELINE_VER.created_at)})`
     + (comparison && cmpName ? ` · 비교 What-if ${cmpName}` : "");
@@ -574,9 +577,21 @@ async function loadZoneTypes() {
     const z = await fetch("/data/zones?limit=20").then((x) => x.json());
     COLDZONES = new Set((z.rows || []).filter((r) => r.storage_type === "COLD").map((r) => r.zone_id));
   } catch (_) { COLDZONES = new Set(); }
+  try {   // 존 상세(용량·재고·상위SKU·보관유형) — 툴팁/보관유형 인코딩용
+    const r = await fetch("/twin/zones").then((x) => x.json());
+    TW.zmeta = {}; (r.zones || []).forEach((z) => { TW.zmeta[z.zone_id] = z; });
+  } catch (_) { TW.zmeta = {}; }
 }
-const TW = { frames: [], occByDay: {}, zpos: {}, entrance: [1, -0.5], idx: 0, timer: null };
-const TW_W = 560, TW_H = 300, TW_XMIN = -1, TW_XMAX = 3, TW_YMIN = -1.2, TW_YMAX = 2.8, ZH = 0.4;
+const TW = { frames: [], occByDay: {}, zpos: {}, zmeta: {}, entrance: [1, -0.5], idx: 0, timer: null };
+// 신호등 점유율 구간색 — 여유(초록)/주의(노랑)/포화(빨강). target=목표 점유율
+function occBand(r, target) {
+  r = Math.max(0, Math.min(r || 0, 1));
+  if (r > 0.9) return { fill: "#e1483b", name: "포화" };
+  if (r > (target || 0.8)) return { fill: "#e8a13a", name: "주의" };
+  return { fill: "#2fae5f", name: "여유" };
+}
+// x·y 모두 4단위 → 정사각 viewBox(440×440)로 px/단위 동일(110). 존 왜곡(좌우 늘림) 제거
+const TW_W = 440, TW_H = 440, TW_XMIN = -1, TW_XMAX = 3, TW_YMIN = -1.2, TW_YMAX = 2.8, ZH = 0.4;
 const txc = (x) => ((x - TW_XMIN) / (TW_XMAX - TW_XMIN)) * TW_W;
 const tyc = (y) => (1 - (y - TW_YMIN) / (TW_YMAX - TW_YMIN)) * TW_H;
 const STATE_COLOR = { MOVING: "#1f77b4", WORKING: "#d62728", IDLE: "#999999" };
@@ -587,27 +602,107 @@ function occColor(r) {
 }
 function dirArrow(h) { h = ((h % 360) + 360) % 360; return h < 45 || h >= 315 ? "⬆" : h < 135 ? "➡" : h < 225 ? "⬇" : "⬅"; }
 
+// 작업 이벤트(work_log)를 일자·존별로 인덱싱 — 작업 완료·진행에 따라 점유율이 즉시 움직이도록
+function buildWorkIndex(workLog) {
+  TW.dayKeys = Object.keys(TW.occByDay).sort();
+  TW.workByZoneDay = {};
+  workLog.forEach((e) => {
+    const d = String(e.end_time).split(" ")[0];
+    const byZone = (TW.workByZoneDay[d] = TW.workByZoneDay[d] || {});
+    (byZone[e.zone_id] = byZone[e.zone_id] || []).push(e);
+  });
+  for (const d in TW.workByZoneDay)
+    for (const z in TW.workByZoneDay[d])
+      TW.workByZoneDay[d][z].sort((a, b) => (a.end_time > b.end_time ? 1 : -1));
+}
+const _mm = (s) => { const t = String(s).split(" ")[1] || "00:00"; const [h, m] = t.split(":").map(Number); return (h || 0) * 60 + (m || 0); };
+
+// 프레임 시각 기준 zone 실시간 점유율 — 당일 기준값에서 익일 기준값으로, 그날 작업이
+// 완료/진행되는 만큼 비례 이동. 작업이 진행 중인 이벤트는 부분(0~1) 반영 → 숫자가 즉시 변한다.
+function liveOcc(z, f) {
+  const day = String(f.time).split(" ")[0];
+  const base = (TW.occByDay[day] || {})[z];
+  if (base == null) return 0;
+  const days = TW.dayKeys || [];
+  const di = days.indexOf(day);
+  const nextDay = di >= 0 && di < days.length - 1 ? days[di + 1] : null;
+  const target = nextDay ? ((TW.occByDay[nextDay] || {})[z] ?? base) : base;
+  const evs = (TW.workByZoneDay[day] || {})[z] || [];
+  if (!evs.length || Math.abs(target - base) < 1e-6) return base;
+  const ft = _mm(f.time);
+  let prog = 0;
+  for (const e of evs) {
+    const es = _mm(e.start_time), ee = _mm(e.end_time);
+    if (ft >= ee) prog += 1;
+    else if (ft > es && ee > es) prog += (ft - es) / (ee - es);
+  }
+  return base + (target - base) * Math.min(prog / evs.length, 1);
+}
+// 현재 프레임에서 각 팀이 작업 중인 zone 판정(접근점 최근접) → 실시간 강조·증감 표시용
+function activeZonesInFrame(f, zpos) {
+  const zh = TW.zoneHalf ?? 0.38, ag = TW.accessGap ?? 0.5, out = {};
+  (f.teams || []).forEach((m) => {
+    if (m.state !== "WORKING") return;
+    let bz = null, bd = 1e9;
+    for (const [z, p] of zpos) {
+      const d = (m.x - (p[0] - zh - ag)) ** 2 + (m.y - p[1]) ** 2;
+      if (d < bd) { bd = d; bz = z; }
+    }
+    if (bz && bd < 0.6) out[bz] = m.job;   // INBOUND=적치(▲) / OUTBOUND=피킹(▼)
+  });
+  return out;
+}
+
 function twFrameSvg(i) {
   const f = TW.frames[i]; if (!f) return "";
-  const day = String(f.time).split(" ")[0];
-  const occ = TW.occByDay[day] || TW.occByDay[Object.keys(TW.occByDay)[0]] || {};
-  let s = `<svg viewBox="0 0 ${TW_W} ${TW_H}" preserveAspectRatio="none">`;
-  // zones
-  for (const [z, p] of Object.entries(TW.zpos)) {
+  const target = TW.target || 0.8;
+  let s = `<svg viewBox="0 0 ${TW_W} ${TW_H}" preserveAspectRatio="xMidYMid meet">`;
+  s += `<defs><filter id="tw-glow" x="-40%" y="-40%" width="180%" height="180%"><feDropShadow dx="0" dy="0" stdDeviation="3.2" flood-color="#e1483b" flood-opacity="0.85"/></filter></defs>`;
+
+  // --- B2: 창고 바닥 + 통로 레인 + 도크 도어 ---
+  const zpos = Object.entries(TW.zpos), xs = zpos.map((e) => e[1][0]), ys = zpos.map((e) => e[1][1]);
+  const fx0 = txc(Math.min(...xs) - ZH - 0.3), fx1 = txc(Math.max(...xs) + ZH + 0.3);
+  const fy0 = tyc(Math.max(...ys) + ZH + 0.3), fy1 = tyc(Math.min(...ys) - ZH - 0.7);
+  s += `<rect x="${fx0}" y="${fy0}" width="${fx1 - fx0}" height="${fy1 - fy0}" rx="10" fill="#eef1f6" stroke="#dbe1ea"/>`;
+  [...new Set(ys)].sort((a, b) => b - a).slice(1).forEach((yv, k, arr) => {   // 행 사이 통로 레인
+    const prev = [...new Set(ys)].sort((a, b) => b - a);
+    const ly = (prev[k] + prev[k + 1]) / 2, yy = tyc(ly);
+    s += `<rect x="${fx0 + 6}" y="${yy - 5}" width="${fx1 - fx0 - 12}" height="10" fill="#e4e9f1"/>`;
+    s += `<line x1="${fx0 + 8}" y1="${yy}" x2="${fx1 - 8}" y2="${yy}" stroke="#cdd5e2" stroke-dasharray="3 6"/>`;
+  });
+  const dl = ["입고", "출고", "입고"], dw = 34, dgap = (fx1 - fx0 - dl.length * dw) / (dl.length + 1);
+  dl.forEach((lb, k) => {   // 도크 도어(바닥 하단)
+    const dx = fx0 + dgap * (k + 1) + dw * k;
+    s += `<rect x="${dx}" y="${fy1 - 5}" width="${dw}" height="9" rx="2" fill="${lb === "입고" ? "#028090" : "#f0a13a"}"/>`;
+    s += `<text x="${dx + dw / 2}" y="${fy1 - 8}" font-size="8.5" fill="#5d6573" text-anchor="middle">${lb}</text>`;
+  });
+
+  // --- 존 = 랙 블록 (A1 채움바 · A2 신호등색 · A3 포화강조 · C2 보관유형) ---
+  const activeZones = activeZonesInFrame(f, zpos);   // 지금 작업 중인 존 → 실시간 강조·증감
+  for (const [z, p] of zpos) {
     const x0 = txc(p[0] - ZH), y0 = tyc(p[1] + ZH), w = txc(p[0] + ZH) - x0, h = tyc(p[1] - ZH) - y0;
-    const ratio = occ[z] || 0;
-    const cold = COLDZONES.has(z);
-    s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="6" fill="${occColor(ratio)}" stroke="${cold ? "#3b82f6" : "#c7d2e6"}" stroke-width="${cold ? 2 : 1}"${cold ? ' stroke-dasharray="4 3"' : ""}/>`;
-    if (cold) {
-      s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="6" fill="#3b82f6" fill-opacity="0.12"/>`;
-      s += `<text x="${x0 + 11}" y="${y0 + 15}" font-size="12">❄</text>`;
-    }
-    s += `<text x="${txc(p[0])}" y="${tyc(p[1]) - 4}" font-size="11" font-weight="600" fill="#33415a" text-anchor="middle">${z.replace("ZONE_", "")}</text>`;
-    s += `<text x="${txc(p[0])}" y="${tyc(p[1]) + 11}" font-size="9" fill="#5d6573" text-anchor="middle">${Math.round(ratio * 100)}%</text>`;
+    const ratio = liveOcc(z, f), band = occBand(ratio, target), over = ratio > target, full = ratio > 0.9;
+    const actJob = activeZones[z];                   // INBOUND(적치)·OUTBOUND(피킹)·undefined
+    const cold = (TW.zmeta[z] && TW.zmeta[z].storage_type === "COLD") || COLDZONES.has(z);
+    const glow = full ? ' filter="url(#tw-glow)"' : "";
+    // 컨테이너(랙) — 작업 중이면 작업색 테두리로 강조
+    const rackStroke = actJob ? (JOB_META[actJob] || {}).color || "#333" : (cold ? "#3b82f6" : "#b9c3d4");
+    s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="4" fill="#ffffff" stroke="${rackStroke}" stroke-width="${actJob ? 2.6 : cold ? 2 : 1.2}"${cold && !actJob ? ' stroke-dasharray="5 3"' : ""}${glow}/>`;
+    // 채움 바(아래→위, 신호등색)
+    const fh = Math.max(0, Math.min(h, h * ratio));
+    if (fh > 0) s += `<rect x="${x0 + 1.5}" y="${y0 + h - fh}" width="${w - 3}" height="${fh}" rx="2" fill="${band.fill}" fill-opacity="0.82"/>`;
+    // 랙 선반 라인(수직) + 목표 점선
+    for (const fr of [0.33, 0.66]) s += `<line x1="${x0 + w * fr}" y1="${y0 + 2}" x2="${x0 + w * fr}" y2="${y0 + h - 2}" stroke="#000" stroke-opacity="0.05"/>`;
+    s += `<line x1="${x0}" y1="${y0 + h * (1 - target)}" x2="${x0 + w}" y2="${y0 + h * (1 - target)}" stroke="#e1483b" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.7"/>`;
+    if (cold) s += `<text x="${x0 + 12}" y="${y0 + 15}" font-size="12">❄</text>`;
+    if (over) s += `<text x="${x0 + w - 12}" y="${y0 + 15}" font-size="12" text-anchor="middle">⚠</text>`;
+    s += `<text x="${txc(p[0])}" y="${tyc(p[1]) - 3}" font-size="11" font-weight="700" fill="#22304d" text-anchor="middle">${z.replace("ZONE_", "")}</text>`;
+    const pctFill = actJob ? (JOB_META[actJob] || {}).color || "#33415a" : "#33415a";
+    const arrow = actJob === "INBOUND" ? " ▲" : actJob === "OUTBOUND" ? " ▼" : "";
+    s += `<text x="${txc(p[0])}" y="${tyc(p[1]) + 12}" font-size="9.5" font-weight="${actJob ? 800 : 600}" fill="${pctFill}" text-anchor="middle">${Math.round(ratio * 100)}%${arrow}</text>`;
+    // C1: 호버 영역(투명) — 툴팁용
+    s += `<rect class="tw-zone" data-zone="${z}" data-occ="${Math.round(ratio * 100)}" x="${x0}" y="${y0}" width="${w}" height="${h}" fill="transparent" style="cursor:pointer"/>`;
   }
-  // entrance
-  s += `<text x="${txc(TW.entrance[0])}" y="${tyc(TW.entrance[1]) + 16}" font-size="10" fill="#333" text-anchor="middle">입구</text>`;
-  s += `<polygon points="${txc(TW.entrance[0])},${tyc(TW.entrance[1]) - 2} ${txc(TW.entrance[0]) - 6},${tyc(TW.entrance[1]) + 8} ${txc(TW.entrance[0]) + 6},${tyc(TW.entrance[1]) + 8}" fill="#333"/>`;
   // teams — 작업 중이면 적치(청록)/피킹(주황)으로 링 색 구분 + 작업 배지
   (f.teams || []).forEach((m) => {
     const cx = txc(m.x), cy = tyc(m.y);
@@ -623,7 +718,14 @@ function twFrameSvg(i) {
 }
 function twSetFrame(i) {
   TW.idx = Math.max(0, Math.min(i, TW.frames.length - 1));
-  $("#tw-svg").innerHTML = twFrameSvg(TW.idx);
+  const host = $("#tw-svg");
+  let canvas = host.querySelector(".tw-canvas");
+  if (!canvas) {   // SVG는 canvas에만, 툴팁(.tw-tip)은 프레임 갱신 시 보존
+    host.innerHTML = `<div class="tw-canvas"></div><div class="tw-tip"></div>`;
+    host.style.position = "relative";
+    canvas = host.querySelector(".tw-canvas");
+  }
+  canvas.innerHTML = twFrameSvg(TW.idx);
   $("#tw-range").value = String(TW.idx);
   $("#tw-time").textContent = TW.frames[TW.idx] ? TW.frames[TW.idx].time : "--";
 }
@@ -631,11 +733,38 @@ function renderTwin(movement, occTs) {
   if (TW.timer) { clearInterval(TW.timer); TW.timer = null; $("#tw-play").textContent = "▶ 재생"; }
   if (!movement || !movement.frames || !movement.frames.length) { $("#tw-svg").textContent = "이동 데이터 없음"; return; }
   TW.frames = movement.frames; TW.zpos = movement.zone_pos || {}; TW.entrance = movement.entrance || [1, -0.5];
+  TW.zoneHalf = movement.zone_half ?? 0.38; TW.accessGap = movement.access_gap ?? 0.5;
   TW.occByDay = {};
   (occTs || []).forEach((row) => { const d = String(row.sim_time).split(" ")[0]; if (!(d in TW.occByDay)) TW.occByDay[d] = row.occupancy || {}; });
+  buildWorkIndex(movement.work_log || []);   // 작업 이벤트→zone 실시간 점유 반영용 인덱스
+  TW.target = (LAST.kpiTargets && Number(LAST.kpiTargets.kpi_target_zone_occupancy)) || 0.8;   // 목표 점유율(신호등 기준)
   $("#tw-teaminfo").textContent = `· 팀 ${movement.team_count}조 (작업자 ${movement.team_count * 2}+지게차 ${movement.team_count})`;
   $("#tw-range").max = String(TW.frames.length - 1);
   twSetFrame(0);
+  setupTwinTooltip();
+}
+
+// C1: 존 호버 툴팁 — 보관유형·용량·현재재고·점유율·상위 SKU
+function setupTwinTooltip() {
+  const host = $("#tw-svg"); if (!host || host._twTip) return;
+  host._twTip = true;   // 이벤트는 한 번만 위임 등록(툴팁 div는 twSetFrame이 유지)
+  host.addEventListener("mousemove", (e) => {
+    const tip = host.querySelector(".tw-tip"); if (!tip) return;
+    const zr = e.target.closest && e.target.closest(".tw-zone");
+    if (!zr) { tip.style.display = "none"; return; }
+    const z = zr.dataset.zone, m = TW.zmeta[z] || {}, occ = zr.dataset.occ;
+    const tops = (m.top_skus || []).map((t) => `${t.sku} ${t.qty}`).join(" · ") || "-";
+    tip.innerHTML = `<b>${z.replace("ZONE_", "존 ")}</b> <span class="tw-tip-tag">${m.storage_type === "COLD" ? "❄ 냉장" : "상온"}</span>`
+      + `<div>점유율(시뮬) <b>${occ}%</b> · 목표 ${Math.round((TW.target || 0.8) * 100)}%</div>`
+      + `<div>용량 ${m.max_capacity ?? "-"} · 현재재고 ${m.current_qty ?? "-"} (실측 ${Math.round((m.occupancy || 0) * 100)}%)</div>`
+      + `<div>상위 SKU: ${tops}</div>`;
+    tip.style.display = "block";
+    const r = host.getBoundingClientRect();
+    let x = e.clientX - r.left + 12, y = e.clientY - r.top + 12;
+    if (x + 190 > r.width) x = e.clientX - r.left - 190;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+  host.addEventListener("mouseleave", () => { const tip = host.querySelector(".tw-tip"); if (tip) tip.style.display = "none"; });
 }
 function twTogglePlay() {
   if (TW.timer) { clearInterval(TW.timer); TW.timer = null; $("#tw-play").textContent = "▶ 재생"; return; }
@@ -647,16 +776,27 @@ function twTogglePlay() {
 const EVT_META = {
   STOCKOUT: ["stockout", "재고소진"], SHIPPING_DELAY: ["delay", "출고지연"],
   STOCKING_FAILED: ["stocking", "적치실패"], ZONE_SATURATED: ["stocking", "Zone 포화"],
+  NO_AVAILABLE_TEAM: ["delay", "가용팀 없음"],
 };
-function renderTimeline(events) {
-  const el = $("#evt-list");
-  if (!events || !events.length) { el.innerHTML = `<div class="evt-empty">병목 이벤트 없음</div>`; return; }
-  el.innerHTML = events.slice(0, 14).map((e) => {
+function evtDetail(e) {   // 이벤트별 사유·리소스 상세
+  const d = e.detail || {}, t = e.event_type;
+  if (t === "STOCKING_FAILED") return `${d.zone_id || ""} 잔여용량 부족 — ${d.overflow || 0}개 미적치 (존 포화로 적치 불가)`;
+  if (t === "ZONE_SATURATED") return `${d.zone_id || ""} 포화`;
+  if (t === "SHIPPING_DELAY") return `${d.order_no || ""} 납기 초과${d.due ? ` (마감 ${d.due})` : ""}`;
+  if (t === "STOCKOUT") return `${d.sku || ""} 재고소진${d.short ? ` (${d.short}개 부족)` : ""}`;
+  if (t === "NO_AVAILABLE_TEAM") return `가용 작업팀 없음 (작업자 ${d.worker_count ?? "-"}·지게차 ${d.forklift_count ?? "-"})`;
+  return d.zone_id || d.order_no || d.sku || "";
+}
+function renderTimeline(events, params) {
+  const el = $("#evt-list"), p = params || {};
+  const head = p.team_count != null
+    ? `<div class="evt-head">리소스 기준: <b>작업팀 ${p.team_count}조</b> (작업자 ${p.worker_count}·지게차 ${p.forklift_count}) — 팀 용량 병목으로 발생한 이벤트</div>`
+    : "";
+  if (!events || !events.length) { el.innerHTML = head + `<div class="evt-empty">병목 이벤트 없음</div>`; return; }
+  el.innerHTML = head + events.slice(0, 14).map((e) => {
     const [cls, label] = EVT_META[e.event_type] || ["info", e.event_type];
-    const d = e.detail || {};
-    const detail = d.order_no ? `${d.order_no} 지연` : d.sku ? `${d.sku} 부족 ${d.short || ""}` : d.zone_id ? `${d.zone_id} (+${d.overflow || ""})` : "";
-    return `<div class="evt-item"><span class="evt-time">${e.sim_time}</span>
-      <span class="evt-badge ${cls}">${label}</span><span class="evt-detail">${detail}</span></div>`;
+    return `<div class="evt-item"><span class="evt-time">${escapeHtml(e.sim_time)}</span>
+      <span class="evt-badge ${cls}">${label}</span><span class="evt-detail">${escapeHtml(evtDetail(e))}</span></div>`;
   }).join("");
 }
 
@@ -722,7 +862,7 @@ function renderMessages(ctx, msgs) {
     if (m.role === "user") appendBubble("user", escapeHtml(m.content), ctx);
     else {
       let src = []; try { src = JSON.parse(m.sources_json || "[]"); } catch (_) {}
-      appendBubble("bot", escapeHtml(m.content).replace(/\n/g, "<br>") + renderSources(src), ctx);
+      colorizeKpiTables(appendBubble("bot", mdToHtml(m.content) + renderSources(src), ctx));
     }
   });
 }
@@ -732,6 +872,54 @@ async function loadSessionInto(ctx) {
   renderMessages(ctx, (r && r.messages) || []);
 }
 const escapeHtml = (s) => (s == null ? "" : String(s)).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// 경량 마크다운 렌더 — 표(GFM), 굵게(**), 인라인코드(`) + 줄바꿈. 채팅 응답용.
+function mdToHtml(src) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  const cells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  const align = (c) => { const t = c.trim(); return t.startsWith(":") && t.endsWith(":") ? "center" : t.endsWith(":") ? "right" : ""; };
+  const lines = String(src || "").split("\n"), out = [];
+  for (let i = 0; i < lines.length;) {
+    const l = lines[i], nx = lines[i + 1] || "";
+    if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(nx)) {   // 표 헤더 + 구분행
+      const head = cells(l), al = cells(nx).map(align), rows = [];
+      i += 2;
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { rows.push(cells(lines[i])); i++; }
+      let t = `<table class="md-table"><thead><tr>` + head.map((h, k) => `<th${al[k] ? ` style="text-align:${al[k]}"` : ""}>${inline(h)}</th>`).join("") + `</tr></thead><tbody>`;
+      rows.forEach((r) => { t += `<tr>` + r.map((c, k) => `<td${al[k] ? ` style="text-align:${al[k]}"` : ""}>${inline(c)}</td>`).join("") + `</tr>`; });
+      out.push(t + `</tbody></table>`);
+      continue;
+    }
+    out.push(inline(l));
+    i++;
+  }
+  return out.join("<br>").replace(/(<\/table>)<br>/g, "$1").replace(/<br>(<table)/g, "$1");
+}
+
+// KPI 증감 방향 판정 — 점유율·지연류=낮을수록 좋음, 가동률=중립
+function kpiDeltaClass(name, deltaText) {
+  const num = parseFloat(String(deltaText).replace(/[▲▼]/g, "").replace(/[^0-9.\-−]/g, "").replace("−", "-"));
+  if (!isFinite(num) || num === 0) return "";
+  if (/가동|util/i.test(name)) return "";              // 가동률: 좋/나쁨 판단 안 함(중립)
+  return num < 0 ? "kpi-good" : "kpi-bad";             // 점유율·출고/적치지연 등: 낮을수록 좋음
+}
+
+// 렌더된 결과표의 '증감' 열을 KPI 방향에 맞춰 색칠
+function colorizeKpiTables(container) {
+  if (!container) return;
+  container.querySelectorAll(".md-table").forEach((tbl) => {
+    const heads = [...tbl.querySelectorAll("thead th")].map((h) => h.textContent.trim());
+    const di = heads.findIndex((h) => h.includes("증감") || /delta/i.test(h));
+    if (di < 0) return;
+    tbl.querySelectorAll("tbody tr").forEach((tr) => {
+      const cells = tr.querySelectorAll("td");
+      if (!cells[di]) return;
+      const cls = kpiDeltaClass(cells[0] ? cells[0].textContent : "", cells[di].textContent);
+      if (cls) cells[di].classList.add(cls);
+    });
+  });
+}
 const chatScrollBottom = (ctx) => { const sc = document.getElementById((ctx || CHAT_CTX).scroll); if (sc) sc.scrollTop = sc.scrollHeight; };
 const chatThread = () => $("#thread-inner") || $("#chat-scroll");
 
@@ -1078,6 +1266,20 @@ function subSummary(ev) {
     default: return ev.kind || "";
   }
 }
+// 시나리오(scenario) → 사람이 읽는 가정 조건 문구(현재 자원 META 기준으로 해석)
+function simConditionText(sc) {
+  sc = sc || {};
+  const bw = META.worker != null ? META.worker : 3, bf = META.forklift != null ? META.forklift : 2;
+  const w = sc.worker_count != null ? sc.worker_count : bw + (sc.worker_delta || 0);
+  const f = sc.forklift_count != null ? sc.forklift_count : bf + (sc.forklift_delta || 0);
+  const team = Math.max(0, Math.min(Math.floor(w / 2), f));
+  const parts = [`작업자 ${w}명·지게차 ${f}대(작업팀 ${team}개)`];
+  if (sc.demand_multiplier != null && Number(sc.demand_multiplier) !== 1) parts.push(`수요 ${sc.demand_multiplier}배`);
+  if (sc.inbound_delay_days) parts.push(`입고지연 ${sc.inbound_delay_days}일`);
+  if (sc.zone_capa_multiplier && Object.keys(sc.zone_capa_multiplier).length) parts.push(`존 용량 조정`);
+  return parts.join(", ");
+}
+
 function handleChatEvent(ev, ui) {
   const ctx = ui.ctx;
   if (ev.type === "substep") {
@@ -1090,6 +1292,27 @@ function handleChatEvent(ev, ui) {
     return;
   }
   if (ev.type === "step") {
+    if (ui.runEl) {   // 진행 상태 문구 갱신 — 스텝은 노드 완료 후 도착하므로 다음 무거운 단계를 예고
+      const dots = `<span class="typing"><i></i><i></i><i></i></span>`;
+      if (ev.node === "Router" && ev.out && ev.out.intent === "simulation_query"
+          && (ev.out.parameters || {}).mode !== "options" && (ev.out.parameters || {}).mode !== "explain") {
+        // 시뮬 지시로 판단 → 가정 조건 문구 먼저 출력 후 기동. 진행은 replication 애니메이션(반복당 ~1.4초).
+        const sc = (ev.out.parameters || {}).scenario;
+        const note = sc
+          ? `네, <b>${simConditionText(sc)}</b>로 가정하여 시뮬레이션을 실행하겠습니다.`
+          : `현재 자원 기준으로 시뮬레이션을 실행하겠습니다.`;
+        const M = sc ? 20 : 10; let n = 1;
+        const paint = () => { if (!ui.runEl) return;
+          const status = n < M ? `${dots} 🧪 시뮬레이션 실행 중… <b>반복 ${n}/${M}</b>` : `${dots} 🧪 결과 집계 중…`;
+          ui.runEl.innerHTML = `<div class="sim-note">${note}</div><div>${status}</div>`; };
+        paint();
+        if (ui.simTicker) clearInterval(ui.simTicker);
+        ui.simTicker = setInterval(() => { if (n < M) n++; paint(); }, 1350);
+      } else if (ev.node === "Tool Executor") {
+        if (ui.simTicker) { clearInterval(ui.simTicker); ui.simTicker = null; }
+        ui.runEl.innerHTML = `${dots} 응답 생성 중…`;
+      }
+    }
     if (!ctx.steps) return;            // Agent Chat: 동작 스텝 숨김(AI 관측에서만)
     const detail = renderStepBody({ node: ev.node, out: ev.out });   // 우측 상세와 동일 렌더 재사용
     const row = document.createElement("div");
@@ -1103,12 +1326,14 @@ function handleChatEvent(ev, ui) {
     ui.stepsEl.appendChild(row);
     chatScrollBottom(ctx);
   } else if (ev.type === "done") {
+    if (ui.simTicker) { clearInterval(ui.simTicker); ui.simTicker = null; }
     if (ui.runEl) ui.runEl.remove();
     if (ev.session_id) CHAT.sessionId = ev.session_id;
     if (ev.error) { ui.finalEl.innerHTML = `<span class="err">오류: ${escapeHtml(ev.error)}</span>`; return; }
-    ui.finalEl.innerHTML = escapeHtml(ev.response || "(응답이 비어 있습니다)").replace(/\n/g, "<br>")
+    ui.finalEl.innerHTML = mdToHtml(ev.response || "(응답이 비어 있습니다)")
       + renderSources(ev.rag_sources)
       + (ev.approval_required ? renderApproval(ev.draft_actions, ev.tool_results) : "");
+    colorizeKpiTables(ui.finalEl);   // 결과표 증감 색상
     if (ev.approval_required) ui.node.querySelectorAll(".approval").forEach((box) => wireApproval(box, ev.tool_results));
     if (ev.intent === "daily_summary") openTodoPanel();   // 오늘 할 일 → 우측 할일 패널 자동 오픈
     if (ctx.steps && ev.tokens) {
@@ -1159,6 +1384,7 @@ async function streamChat(text, ctx) {
     if (ui.runEl) ui.runEl.remove();
     ui.finalEl.innerHTML = `<span class="err">요청 실패: ${escapeHtml(String(e))}</span>`;
   } finally {
+    if (ui.simTicker) { clearInterval(ui.simTicker); ui.simTicker = null; }
     if (send) send.disabled = false;
     const ta2 = document.getElementById(ctx.text); if (ta2) ta2.focus();
     setUpdated(); loadSessions().catch(() => {});
@@ -1506,6 +1732,9 @@ async function pollAuto() {
     AUTO.capacity = cap || null;                       // 실시간 작업팀 가용/백로그
     if (sim) setSimbar(sim);
     if (reqs) renderRequests(reqs.requests || []);
+    loadDispatchLog().catch(() => {});   // 작업 배정 계산 로그 갱신
+    loadRouteLog().catch(() => {});      // ZONE 방문순서(TSP) 계산 로그 갱신
+    loadExecLog().catch(() => {});       // 액션 실행 순서 로그 갱신
     if ($("#auto-cycle") && document.activeElement !== $("#auto-cycle")) {
       $("#auto-cycle").value = mode.auto_mode_cycle_interval_seconds || 15;
     }
@@ -1636,6 +1865,194 @@ async function showAwaitingOrders() {
 async function syncLive() {
   try { const s = await fetch("/realtime/status").then((r) => r.json()); LIVE.running = !!s.running; } catch (_) {}
 }
+const DL_LABEL = { ASSIGNED: "✓ 배정", SKIP_ZONE_BUSY: "⏸ 존 사용중", SKIP_NO_TEAM: "팀 부족", DUP: "중복" };
+async function loadDispatchLog() {
+  const el = $("#dispatch-log"); if (!el) return;
+  const r = await fetch("/api/blackboard/dispatch-log?limit=80").then((x) => x.json()).catch(() => null);
+  const rows = (r && r.rows) || [];
+  if (!rows.length) { el.innerHTML = `<div class="auto-empty">배정 계산 이력이 없습니다. 자동운영 중 팀이 배정될 때 기록됩니다.</div>`; return; }
+  const groups = {};   // 사이클(cycle_ts)별 묶음
+  rows.forEach((x) => { (groups[x.cycle_ts] = groups[x.cycle_ts] || []).push(x); });
+  el.innerHTML = Object.entries(groups).slice(0, 6).map(([ts, gs]) => {
+    gs.sort((a, b) => b.dispatch_score - a.dispatch_score);
+    const items = gs.slice(0, 12).map((g) => {
+      const cls = g.decision === "ASSIGNED" ? "ok" : g.decision.startsWith("SKIP_ZONE") ? "warn" : "mut";
+      const f = g.factors || {};
+      const ftxt = g.kind === "picking"
+        ? `마감긴급 ${f.due_urgency ?? "-"} · 대기 ${f.waiting_age ?? "-"} · 짧은작업 ${f.short_job_bonus ?? "-"} · 동선 ${f.route_simplicity ?? "-"}${f.slack_minutes != null ? ` · slack ${f.slack_minutes}분` : ""}`
+        : `입고경과 ${f.received_age ?? "-"} · 출고필요 ${f.outbound_need ?? "-"} · 대기 ${f.waiting_age ?? "-"} · 짧은작업 ${f.short_job_bonus ?? "-"}`;
+      return `<div class="dl-row ${cls}"><span class="dl-score">${g.dispatch_score}</span>
+        <span class="dl-kind">${g.kind === "picking" ? "🛒 피킹·출고" : "📥 적치·입고"}</span>
+        <span class="dl-task">${escapeHtml(g.task_id)}</span><span class="dl-zone">${escapeHtml(g.zone_id || "-")}</span>
+        <span class="dl-dec ${cls}">${DL_LABEL[g.decision] || safeText(g.decision)}</span>
+        <span class="dl-fac">${escapeHtml(ftxt)}</span></div>`;
+    }).join("");
+    const assigned = gs.filter((g) => g.decision === "ASSIGNED").length;
+    const head = `<div class="dl-row dl-head"><span>점수</span><span>유형</span><span>작업ID</span><span>존</span><span>판정</span><span>점수 인수(가중합 근거)</span></div>`;
+    return `<div class="dl-cycle"><div class="dl-ts">${escapeHtml(ts)} · 후보 ${gs.length} · 배정 ${assigned}</div>${head}${items}</div>`;
+  }).join("");
+}
+
+const RL_SRC = { AUTO: "🤖 자동", HITL: "🙋 지시" };
+async function loadRouteLog() {
+  const el = $("#route-log"); if (!el) return;
+  const r = await fetch("/api/blackboard/route-log?limit=60").then((x) => x.json()).catch(() => null);
+  const rows = (r && r.rows) || [];
+  if (!rows.length) { el.innerHTML = `<div class="auto-empty">ZONE 방문순서 계산 이력이 없습니다. 피킹 작업이 발행/지시될 때 기록됩니다.</div>`; return; }
+  el.innerHTML = rows.slice(0, 30).map((g) => {
+    const seq = Array.isArray(g.zone_sequence) ? g.zone_sequence : [];
+    const ids = Array.isArray(g.zone_ids) ? g.zone_ids : [];
+    const short = (z) => String(z).replace(/^ZONE_/, "");
+    const path = seq.length ? ["입구", ...seq.map(short), "입구"].join(" → ") : "—";
+    const cls = g.source === "HITL" ? "warn" : "ok";
+    const total = Math.round((g.travel_minutes || 0) + (g.work_minutes || 0));
+    return `<div class="rl-row ${cls}">
+      <span class="rl-src ${cls}">${RL_SRC[g.source] || safeText(g.source)}</span>
+      <span class="rl-task">${escapeHtml(g.task_id || "-")}</span>
+      <span class="rl-order">${escapeHtml(g.order_no || "-")}</span>
+      <span class="rl-path">${escapeHtml(path)}</span>
+      <span class="rl-meta">방문존 ${ids.length} · 거리 ${(g.route_cost ?? 0).toFixed ? g.route_cost.toFixed(2) : g.route_cost} · 이동 ${g.travel_minutes ?? "-"}분 · 작업 ${g.work_minutes ?? "-"}분 · 합 ${total}분</span>
+      <span class="rl-ts">${escapeHtml(g.ts || "")}</span></div>`;
+  }).join("");
+}
+
+// 액션 실행 순서 로그 — 사이클별 실행순(seq)·우선순위·결과. 자원해제(FINISH) 최우선·priority 실행 검증
+const EL_ICON = { FINISH_ZONE_LEG: "🏁 완료", START_ZONE_WORK: "▶ 시작", ALLOCATE_TEAM: "👥 팀배정",
+  CREATE_PICKING_TASK: "🛒 피킹생성", REPRIORITIZE_PICKING_TASK: "↕ 재정렬", CREATE_SHIPPING_TASK: "🚚 출고",
+  PLACE_REPLENISHMENT_ORDER: "📦 발주", CREATE_PUTAWAY_TASK: "📥 적치생성", CREATE_INBOUND_TASK: "📋 입고생성",
+  PUTAWAY_BLOCKED: "⛔ 적치보류", INVENTORY_RISK_ALERT: "⚠ 위험경보" };
+const EL_EXECUTED = new Set(["SUCCESS", "ASSIGNED"]);   // 실제 실행된 결과(그 외는 차단/보류/실패=미실행)
+let EXEC_GROUPS = {}, EXEC_EXPLAIN_WIRED = false, EXEC_LAST_TS = null, EXEC_SHOWN_TS = null;   // 실행 로그 설명 패널 상태
+// dispatch 인수 키 → 한글 라벨(경합 사유 가독성)
+const EL_FKEY = { due_urgency: "마감긴급", waiting_age: "대기", short_job_bonus: "짧은작업", route_simplicity: "동선",
+  received_age: "입고경과", outbound_need: "출고필요" };
+const EL_HIDE = ["pending_outbound_qty", "inbound_qty", "remaining_minutes", "remaining_work", "remaining_travel", "slack_minutes"];
+// A단계(작업 진행 스케줄러) 액션 유형 — 나머지는 B단계(신규 편성, 에이전트 제안)
+const EL_STAGE_A = new Set(["FINISH_ZONE_LEG", "START_ZONE_WORK", "ALLOCATE_TEAM"]);
+async function loadExecLog() {
+  const el = $("#exec-log"); if (!el) return;
+  const r = await fetch("/api/blackboard/exec-log?limit=120").then((x) => x.json()).catch(() => null);
+  const rows = (r && r.rows) || [];
+  if (!rows.length) { el.innerHTML = `<div class="auto-empty">실행 이력이 없습니다. 자동운영 사이클에서 액션이 실행되면 순서대로 기록됩니다.</div>`; return; }
+  const groups = {};   // 사이클(cycle_ts)별 묶음
+  rows.forEach((x) => { (groups[x.cycle_ts] = groups[x.cycle_ts] || []).push(x); });
+  EXEC_GROUPS = groups;   // 설명 패널이 참조
+  const elRow = (g) => {
+    const executed = EL_EXECUTED.has(g.decision);
+    const cls = executed ? "ok" : g.decision === "POLICY_BLOCKED" ? "warn" : "mut";
+    const decTxt = executed ? safeText(g.decision)
+      : g.decision === "POLICY_BLOCKED" ? "차단 · 미실행" : safeText(g.decision) + " · 미실행";
+    const base = Math.round(g.base_priority), eff = Math.round(g.effective_priority), adj = eff - base;
+    const f = g.factors;
+    const ftxt = f ? Object.entries(f).filter(([k]) => !EL_HIDE.includes(k))
+      .map(([k, v]) => `${EL_FKEY[k] || k} ${v}`).join(" · ") : "";
+    const why = [];
+    if (g.reason) why.push(escapeHtml(g.reason));
+    if (ftxt) why.push("인수: " + escapeHtml(ftxt));
+    return `<div class="el-entry ${cls}${executed ? "" : " el-unexec"}">
+      <div class="el-row">
+        <span class="el-seq">#${g.seq}</span>
+        <span class="el-type">${EL_ICON[g.action_type] || safeText(g.action_type)}</span>
+        <span class="el-prio" title="유형기준 ${base} + 우선순위 조정 ${adj} = ${eff}">${eff}<small class="el-decomp">유형 ${base}+조정 ${adj}</small></span>
+        <span class="el-tgt">${escapeHtml(g.target_id || "-")}</span>
+        <span class="el-dec ${cls}">${decTxt}</span>
+      </div>
+      ${why.length ? `<div class="el-why">↳ ${why.join(" · ")}</div>` : ""}
+    </div>`;
+  };
+  el.innerHTML = Object.entries(groups).slice(0, 6).map(([ts, gs]) => {
+    gs.sort((a, b) => a.seq - b.seq);   // 실행 순서대로
+    const aRows = gs.filter((g) => EL_STAGE_A.has(g.action_type));   // 작업 진행(스케줄러)
+    const bRows = gs.filter((g) => !EL_STAGE_A.has(g.action_type));  // 신규 편성(에이전트 제안)
+    let sec = "";
+    if (aRows.length) {
+      sec += `<div class="el-phase el-phaseA">A단계 · 작업 진행 <small>발행된 작업을 완료→시작→팀배정 · 자원해제 최우선(고정 순서)</small></div>`
+        + aRows.map(elRow).join("");
+    }
+    if (bRows.length) {
+      let comp = "";
+      if (bRows.length >= 2) {   // B단계 경합: 우선순위(유형+조정) 높은 순, 동점은 대상키 순
+        const top = bRows[0], eff0 = Math.round(top.effective_priority);
+        const tie = bRows.filter((x) => Math.round(x.effective_priority) === eff0).length > 1;
+        const bBlk = bRows.filter((x) => !EL_EXECUTED.has(x.decision)).length;
+        comp = ` <span class="el-comp">경합 ${bRows.length}건 → 우선순위 높은 순${tie ? "(동점은 대상키 순)" : ""}, #${top.seq} ${EL_ICON[top.action_type] || top.action_type} ${eff0} 최고${bBlk ? ` · ${bBlk}건 미실행` : ""}</span>`;
+      }
+      sec += `<div class="el-phase el-phaseB">B단계 · 신규 편성 <small>이벤트 대응 에이전트 제안 · 우선순위 경합</small>${comp}</div>`
+        + bRows.map(elRow).join("");
+    }
+    // 헤더 카운트: 실제 실행(SUCCESS/ASSIGNED)만 '실행', 차단/보류·실패는 별도 표기
+    const exec = gs.filter((g) => EL_EXECUTED.has(g.decision)).length;
+    const blk = gs.filter((g) => g.decision === "POLICY_BLOCKED").length;
+    const fail = gs.length - exec - blk;
+    let cnt = `실행 ${exec}건`;
+    if (blk) cnt += ` · 차단 ${blk}`;
+    if (fail) cnt += ` · 실패 ${fail}`;
+    return `<div class="el-cycle el-clickable" data-ts="${escapeHtml(ts)}" title="클릭 → 판단 사유 설명"><div class="el-ts">${escapeHtml(ts)} · ${cnt} <span class="el-explain-hint">💬 설명</span></div>${sec}</div>`;
+  }).join("");
+  setupExecExplain();
+  const newest = Object.keys(groups)[0];
+  // 최초이거나, 사용자가 과거 사이클을 고정해 보고 있지 않으면(=최신을 따라가는 중) 최신 사이클 표시
+  if (newest) {
+    const following = EXEC_SHOWN_TS === null || EXEC_SHOWN_TS === EXEC_LAST_TS;
+    if (EXEC_SHOWN_TS === null || (newest !== EXEC_LAST_TS && following)) explainExecCycle(newest);
+  }
+  EXEC_LAST_TS = newest;
+}
+
+function setupExecExplain() {
+  if (EXEC_EXPLAIN_WIRED) return;
+  const log = $("#exec-log"); if (!log) return;
+  log.addEventListener("click", (e) => {
+    const cyc = e.target.closest && e.target.closest(".el-cycle");
+    if (cyc && cyc.dataset.ts) explainExecCycle(cyc.dataset.ts);
+  });
+  EXEC_EXPLAIN_WIRED = true;
+}
+
+// 로그 reason 문자열에서 원제안 사유 / 차단 사유 분리
+function elSplitReason(reason) {
+  if (!reason) return { main: "", block: "" };
+  const i = reason.indexOf("[차단]");
+  if (i >= 0) return { main: reason.slice(0, i).replace(/[—-]\s*$/, "").trim(), block: reason.slice(i + 4).trim() };
+  return { main: reason.trim(), block: "" };
+}
+
+// 사이클의 판단 사유를 자연어로 풀어 우측 설명 패널에 추가
+function explainExecCycle(ts) {
+  const gs = (EXEC_GROUPS[ts] || []).slice().sort((a, b) => a.seq - b.seq);
+  const box = $("#exec-explain"); if (!box || !gs.length) return;
+  const A = gs.filter((g) => EL_STAGE_A.has(g.action_type));
+  const B = gs.filter((g) => !EL_STAGE_A.has(g.action_type));
+  const exec = gs.filter((g) => EL_EXECUTED.has(g.decision));
+  const blk = gs.filter((g) => g.decision === "POLICY_BLOCKED");
+  const nm = (g) => escapeHtml(EL_ICON[g.action_type] || g.action_type);
+  let html = `<div class="elx-h">🕘 ${escapeHtml(ts)} · 총 ${gs.length}건 (실행 ${exec.length} · 차단 ${blk.length})</div>`;
+  html += `<p>실행 순서 = <b>유형기준 + 조정 = 최종우선순위</b>의 내림차순(동점은 대상 키 순).</p>`;
+  if (A.length) {
+    html += `<p><b>A단계 · 작업 진행</b>(자원해제 최우선, 고정 순서): ${A.map(nm).join(" → ")}. 이미 발행된 작업을 완료→시작→팀배정으로 먼저 처리합니다.</p>`;
+  }
+  if (B.length) {
+    html += `<p><b>B단계 · 신규 편성</b> — 에이전트 제안 ${B.length}건 경합:</p><ol class="elx-list">`;
+    B.forEach((g) => {
+      const base = Math.round(g.base_priority), eff = Math.round(g.effective_priority), adj = eff - base;
+      const { main, block } = elSplitReason(g.reason);
+      const done = EL_EXECUTED.has(g.decision);
+      html += `<li class="${done ? "" : "elx-blk"}"><b>${nm(g)}</b> 최종 <b>${eff}</b> = 유형 ${base} + 조정 ${adj}`
+        + (main ? ` · ${escapeHtml(main)}` : "")
+        + (done ? ` <span class="elx-ok">✅ 실행</span>` : ` <span class="elx-no">⛔ 차단(미실행)${block ? ": " + escapeHtml(block) : ""}</span>`)
+        + `</li>`;
+    });
+    html += `</ol>`;
+    if (blk.length) {
+      const rs = [...new Set(blk.map((g) => elSplitReason(g.reason).block).filter(Boolean))];
+      html += `<p class="elx-note">⛔ 차단 ${blk.length}건은 우선순위와 무관하게 <b>정책·시뮬 게이트</b>에 막혔습니다${rs.length ? ` — ${escapeHtml(rs.join("; "))}` : ""}. 게이트 대상 유형(입고·적치=보관공간, 피킹·팀배정=가동률)이 과부하이면 해당 액션만 보류됩니다.</p>`;
+    }
+  }
+  box.innerHTML = `<div class="el-bubble">${html}</div>`;   // 클릭한 사이클만 표시(누적 안 함)
+  EXEC_SHOWN_TS = ts;
+  box.scrollTop = 0;
+}
+
 function enterAuto() {
   setupAuto();
   // 로그를 새로 그려 깜빡임/잔재 없이 현재 상태부터 시작

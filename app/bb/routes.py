@@ -161,6 +161,60 @@ def awaiting_orders():
     return {"orders": backorder.awaiting_orders()}
 
 
+@router.get("/blackboard/dispatch-log")
+def dispatch_log(limit: int = 80):
+    """작업 배정 계산 히스토리 — dispatch_score 휴리스틱 결과(최근순)."""
+    import json as _json
+    from bb import zone_scheduler
+    from tools.common import q as _q
+    zone_scheduler._ensure_dispatch_table()
+    rows = _q("""SELECT cycle_ts, task_id, kind, zone_id, dispatch_score, factors_json, decision, created_at
+                 FROM dispatch_scores ORDER BY id DESC LIMIT ?""", (max(1, min(int(limit), 300)),))
+    for r in rows:
+        try:
+            r["factors"] = _json.loads(r.pop("factors_json") or "{}")
+        except Exception:
+            r.pop("factors_json", None); r["factors"] = {}
+    return {"rows": rows}
+
+
+@router.get("/blackboard/route-log")
+def route_log(limit: int = 80):
+    """피킹 ZONE 방문순서 계산 히스토리 — TSP closed-route 결과(최근순, AUTO/HITL)."""
+    import json as _json
+    from bb import zone_work
+    from tools.common import q as _q
+    zone_work._ensure_route_table()
+    rows = _q("""SELECT ts, task_id, order_no, source, zone_ids, zone_sequence,
+                        route_cost, travel_minutes, work_minutes, created_at
+                 FROM zone_routes ORDER BY id DESC LIMIT ?""", (max(1, min(int(limit), 300)),))
+    for r in rows:
+        for k in ("zone_ids", "zone_sequence"):
+            try:
+                r[k] = _json.loads(r.get(k) or "[]")
+            except Exception:
+                r[k] = []
+    return {"rows": rows}
+
+
+@router.get("/blackboard/exec-log")
+def exec_log_view(limit: int = 120):
+    """액션 실행 순서 트레이스 — 사이클별 실행순(seq)·우선순위·결과(최근순)."""
+    import json as _json
+    from bb import exec_log
+    from tools.common import q as _q
+    exec_log.ensure_table()
+    rows = _q("""SELECT cycle_ts, seq, action_type, base_priority, effective_priority,
+                        target_id, decision, factors_json, reason, created_at
+                 FROM action_exec_log ORDER BY id DESC LIMIT ?""", (max(1, min(int(limit), 400)),))
+    for r in rows:
+        try:
+            r["factors"] = _json.loads(r.pop("factors_json") or "null")
+        except Exception:
+            r.pop("factors_json", None); r["factors"] = None
+    return {"rows": rows}
+
+
 # ---------- 가용/예약(검증·디버그용) ----------
 @router.get("/blackboard/availability/{sku}")
 def availability(sku: str):

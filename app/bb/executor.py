@@ -111,7 +111,7 @@ def _precheck(a: dict) -> dict:
 
 # ---------- 핸들러 (단일 conn 트랜잭션 내 write) ----------
 def _h_create_picking(conn, a: dict) -> dict:
-    from bb.zone_work import zone_sequence_for_skus
+    from bb.zone_work import log_route, route_plan
     p = json.loads(a.get("payload_json") or "{}")
     order_no = p["order_no"]
     lines = conn.execute("SELECT sku, qty FROM outbound_order_lines WHERE order_no=?", (order_no,)).fetchall()
@@ -119,9 +119,11 @@ def _h_create_picking(conn, a: dict) -> dict:
     total = sum(l["qty"] for l in lines)
     est = round(8 + (line_count - 1) * 2 + (total // 10) * 2)   # 간이 소요시간(분)
     task_id = "PCK-" + uuid.uuid4().hex[:6]
-    zone_seq = zone_sequence_for_skus(list(dict.fromkeys(l["sku"] for l in lines)))
+    plan = route_plan(list(dict.fromkeys(l["sku"] for l in lines)))   # TSP 방문순서 + 상세
+    zone_seq = plan["zone_sequence"]
     conn.execute("""INSERT INTO picking_tasks(picking_task_id,order_no,estimated_minutes,status,zone_sequence,zone_index,issued_at)
                     VALUES(?,?,?,?,?,0,?)""", (task_id, order_no, est, "ISSUED", json.dumps(zone_seq), now()))
+    log_route(conn, task_id, order_no, "AUTO", plan)   # 경로 계산 히스토리
     conn.execute("UPDATE outbound_orders SET status='PICKING_ISSUED' WHERE order_no=?", (order_no,))
     resv = []
     for ln in lines:
@@ -177,7 +179,7 @@ def _h_allocate_team(conn, a: dict) -> dict:
 def _h_start_zone_work(conn, a: dict) -> dict:
     from datetime import datetime, timedelta
 
-    from bb.zone_work import current_zone, zone_minutes
+    from bb.zone_work import current_zone, leg_travel_minutes, zone_minutes
     p = json.loads(a.get("payload_json") or "{}")
     tbl = "picking_tasks" if p.get("kind") == "picking" else "stocking_tasks"
     idcol = "picking_task_id" if p.get("kind") == "picking" else "stocking_task_id"
@@ -185,11 +187,12 @@ def _h_start_zone_work(conn, a: dict) -> dict:
     zid = current_zone(p.get("kind"), dict(t))
     started = datetime.strptime(now(), "%Y-%m-%d %H:%M:%S")
     mins = zone_minutes(zid) if zid else 0.0
-    expected = (started + timedelta(minutes=mins)).strftime("%Y-%m-%d %H:%M:%S")
+    travel = leg_travel_minutes(p.get("kind"), dict(t)) if zid else 0.0   # 이동시간(수리식 d_ij) 반영
+    expected = (started + timedelta(minutes=mins + travel)).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(f"""UPDATE {tbl} SET status='IN_PROGRESS', started_at=?, expected_complete_at=?
                      WHERE {idcol}=?""", (now(), expected, p["task_id"]))
     return {"task_id": p["task_id"], "kind": p.get("kind"), "zone_id": zid,
-            "work_minutes": mins, "expected_complete_at": expected}
+            "work_minutes": mins, "travel_minutes": travel, "expected_complete_at": expected}
 
 
 def _deplete_inventory(conn, sku: str, qty: int) -> None:

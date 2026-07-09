@@ -295,3 +295,46 @@ CREATE INDEX IF NOT EXISTS idx_tool_logs_run ON tool_logs(run_id);
 CREATE INDEX IF NOT EXISTS idx_rag_logs_run ON rag_logs(run_id);
 CREATE INDEX IF NOT EXISTS idx_sim_kpis_run ON simulation_kpis(sim_run_id);
 CREATE INDEX IF NOT EXISTS idx_sim_events_run ON simulation_events(sim_run_id);
+
+-- 작업 배정 계산 히스토리(dispatch_score 휴리스틱) — zone_scheduler가 팀 배정 사이클마다 기록
+CREATE TABLE IF NOT EXISTS dispatch_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_ts TEXT,                     -- 배정 사이클 시각
+    task_id TEXT,
+    kind TEXT,                         -- picking | stocking
+    zone_id TEXT,
+    dispatch_score REAL,
+    factors_json TEXT,                 -- 점수 인수 상세(due_urgency 등)
+    decision TEXT,                     -- ASSIGNED | SKIP_ZONE_BUSY | SKIP_NO_TEAM | ...
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 피킹 ZONE 방문순서(TSP closed-route) 계산 히스토리 — 자동(AUTO)/지시(HITL) 공통
+CREATE TABLE IF NOT EXISTS zone_routes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT,                           -- 계산 시각
+    task_id TEXT,
+    order_no TEXT,
+    source TEXT,                       -- AUTO | HITL
+    zone_ids TEXT,                     -- 방문 대상 존(정렬, JSON)
+    zone_sequence TEXT,                -- TSP 최적 방문순서(입구 제외, JSON)
+    route_cost REAL,                   -- 입구→…→입구 거리비용
+    travel_minutes REAL,              -- 이동시간(분, d_ij 기반)
+    work_minutes REAL,                -- 존 작업시간 합(분)
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 액션 실행 순서 트레이스 — 사이클별 실행 순서(seq)·우선순위·결과. §1 우선순위·§3 자원해제 최우선 검증용
+CREATE TABLE IF NOT EXISTS action_exec_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_ts TEXT,                     -- 실행 사이클 시각
+    seq INTEGER,                       -- 사이클 내 실행 순번(1부터)
+    action_type TEXT,
+    base_priority REAL,                -- action_type base 우선순위
+    effective_priority REAL,          -- base + priority_score(dispatch_score 등)
+    target_id TEXT,
+    decision TEXT,                     -- SUCCESS | POLICY_BLOCKED | FAIL ...
+    factors_json TEXT,                 -- ALLOCATE_TEAM의 score_factors 등 근거
+    reason TEXT,                       -- 우선순위/배정 사유(경합 판정 이해용)
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);

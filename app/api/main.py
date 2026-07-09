@@ -69,6 +69,15 @@ DATASETS = {
                         "filters": {"sku": "sku"}},
     "simulation_events": {"table": "simulation_events", "order": "event_id DESC", "search": ["sim_run_id", "sim_time", "event_type", "detail_json"],
                           "filters": {"status": "event_type"}},
+    "dispatch_scores": {"table": "dispatch_scores", "order": "id DESC",
+                        "search": ["task_id", "kind", "zone_id", "decision", "cycle_ts"],
+                        "filters": {"status": "decision", "zone_id": "zone_id"}},
+    "zone_routes": {"table": "zone_routes", "order": "id DESC",
+                    "search": ["task_id", "order_no", "source", "zone_sequence", "ts"],
+                    "filters": {"status": "source"}},
+    "action_exec_log": {"table": "action_exec_log", "order": "id DESC",
+                        "search": ["action_type", "target_id", "decision", "cycle_ts"],
+                        "filters": {"status": "decision"}},
 }
 
 
@@ -389,6 +398,23 @@ def simulate(r: SimulateReq):
                 "comparison": whatif.compare_simulation_scenarios(base, scen)["comparison"]}
     return des.run_des_simulation(horizon_days=r.horizon_days, near_future_days=r.near_future_days,
                                   replications=r.replications)
+
+
+@app.get("/twin/zones")
+def twin_zones():
+    """디지털 트윈 존 상세 — 보관유형·용량·현재 실재고·점유율·상위 SKU(툴팁·보관유형 인코딩용)."""
+    out = []
+    for z in q("SELECT zone_id, zone_name, storage_type, max_capacity FROM zones ORDER BY zone_id"):
+        cur = q("""SELECT COALESCE(SUM(i.qty),0) s FROM inventory i JOIN locations l ON l.location_id=i.location_id
+                   WHERE l.zone_id=? AND i.status='AVAILABLE'""", (z["zone_id"],))[0]["s"]
+        tops = q("""SELECT i.sku, COALESCE(SUM(i.qty),0) qty FROM inventory i JOIN locations l ON l.location_id=i.location_id
+                    WHERE l.zone_id=? AND i.status='AVAILABLE' GROUP BY i.sku ORDER BY qty DESC LIMIT 3""",
+                 (z["zone_id"],))
+        cap = z["max_capacity"] or 0
+        out.append({"zone_id": z["zone_id"], "zone_name": z["zone_name"], "storage_type": z["storage_type"],
+                    "max_capacity": cap, "current_qty": cur, "occupancy": round(cur / cap, 3) if cap else 0,
+                    "top_skus": [{"sku": t["sku"], "qty": t["qty"]} for t in tops]})
+    return {"zones": out}
 
 
 @app.get("/simulation/versions")

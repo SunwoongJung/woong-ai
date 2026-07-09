@@ -35,5 +35,6 @@ def propose(event: dict) -> list[dict]:
         event_id=event["event_id"], target_type="order", target_id=order_no,
         payload={"order_no": order_no, "skus": skus},
         priority_score=float(100 - pri * 10), auto_executable=True,
-        reason=f"신규 출고주문 {order_no}(SKU {','.join(skus)}) 피킹작업 자동 생성",
+        reason=f"신규 출고주문 {order_no}(SKU {','.join(skus)}, 고객우선순위 {pri}) 피킹작업 자동 생성 "
+               f"— 조정 {100 - pri * 10}=100−우선순위{pri}×10",
     )]

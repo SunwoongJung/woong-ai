@@ -11,6 +11,19 @@ from bb.store import ensure_schema, now
 # 같은 idempotency_key로 아래 상태가 이미 있으면 신규 생성 안 함(중복 방지)
 _ACTIVE = ("PENDING", "READY", "RUNNING", "SUCCESS")
 
+# action_type별 base 우선순위 — 실행 순서 결정용(자원 해제·시작이 신규 생성보다 우선).
+# control_loop(도메인 action 정렬)·zone_scheduler(exec 트레이스)가 공유. 순환 임포트 방지 위해 여기 배치.
+BASE_PRIORITY = {
+    "FINISH_ZONE_LEG": 100, "START_ZONE_WORK": 90, "ALLOCATE_TEAM": 80,
+    "CREATE_PICKING_TASK": 70, "REPRIORITIZE_PICKING_TASK": 65, "CREATE_SHIPPING_TASK": 60,
+    "PLACE_REPLENISHMENT_ORDER": 55, "CREATE_PUTAWAY_TASK": 50, "CREATE_INBOUND_TASK": 40,
+}
+DEFAULT_BASE_PRIORITY = 30   # 표에 없는 action_type 기본값(CREATE_INBOUND_TASK보다 낮게)
+
+
+def type_priority(action_type: str) -> float:
+    return float(BASE_PRIORITY.get(action_type, DEFAULT_BASE_PRIORITY))
+
 
 def create(agent_name: str, action_type: str, idempotency_key: str, *, event_id=None,
            target_type=None, target_id=None, payload=None, priority_score: float = 0.0,

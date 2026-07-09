@@ -27,3 +27,10 @@ app/eval/results/
 
 # Office 임시/잠금 파일
 ~$*
+
+# Claude Code 로컬 설정
+.claude/
+
+# 대용량 생성 PDF(재생성 가능, 소스는 manual.md) — stale 방지 위해 미추적
+/app/manual.pdf
+/manual.pdf
