@@ -3816,47 +3816,67 @@ hr {
 <p>실제 실행 우선순위는 다음과 같다.</p>
 <pre><code>effective_priority = action_type_base_priority + priority_score</code></pre>
 <p>같은 우선순위에서는 <code>idempotency_key</code> 또는 <code>target_id</code>를 기준으로 결정론적으로 정렬한다.</p>
-<p><code>priority_score</code>는 Action을 제안한 도메인 Agent가 정한 조정값이며, Action 유형별로 다음과 같이 정해진다.</p>
+<p><code>priority_score</code>는 Action을 제안한 Agent가 정한 조정값이며, **각 Action 유형은 특정 Agent가 고정적으로 제안**하되 **조정값은 모두 상황에 따라 동적으로 산출**된다(Dispatch Score와 같은 스타일: 각 factor 0~1 정규화 후 가중합, **가중치 합 = 상한**). 유형별 산식은 다음과 같다.</p>
 <table>
 <thead><tr>
 <th>Action 유형</th>
-<th>priority_score(조정)</th>
-<th>근거</th>
+<th>제안 Agent</th>
+<th>priority_score(조정) 산식</th>
+<th>상한</th>
 </tr></thead>
 <tbody>
 <tr>
 <td><code>CREATE_PICKING_TASK</code></td>
-<td>100 − 고객우선순위 × 10</td>
-<td>고객우선순위가 높은(값이 작은) 출고의 피킹을 먼저 생성</td>
+<td>PickingAgent</td>
+<td><code>100 − 고객우선순위 × 10</code></td>
+<td>90</td>
 </tr>
 <tr>
-<td><code>PLACE_REPLENISHMENT_ORDER</code></td>
-<td>70</td>
-<td>결품 대응 발주</td>
+<td><code>REPRIORITIZE_PICKING_TASK</code></td>
+<td>OutboundAgent</td>
+<td><code>45·납기긴급 + 15·대기</code></td>
+<td>60</td>
 </tr>
 <tr>
 <td><code>CREATE_SHIPPING_TASK</code></td>
-<td>55~60</td>
-<td>출고확정 대기 작업 생성(경로별)</td>
+<td>OutboundAgent</td>
+<td><code>40·납기긴급 + 15·대기</code></td>
+<td>55</td>
+</tr>
+<tr>
+<td><code>PLACE_REPLENISHMENT_ORDER</code></td>
+<td>AutoOrderAgent</td>
+<td><code>40·결품심각도 + 20·납기긴급 + 10·소진위험</code></td>
+<td>70</td>
 </tr>
 <tr>
 <td><code>CREATE_INBOUND_TASK</code></td>
+<td>InboundAgent</td>
+<td><code>30·출고필요 + 12·냉장 + 8·물량</code></td>
 <td>50</td>
-<td>입고 처리</td>
 </tr>
 <tr>
 <td><code>CREATE_PUTAWAY_TASK</code></td>
+<td>PutawayAgent</td>
+<td><code>24·출고필요 + 10·냉장 + 6·물량</code></td>
 <td>40</td>
-<td>적치 작업 생성</td>
 </tr>
 <tr>
 <td><code>ALLOCATE_TEAM</code></td>
-<td>= Dispatch Score</td>
-<td>11.4 참조</td>
+<td>ResourceAgent / ZoneScheduler</td>
+<td>**= Dispatch Score**(양 경로 통일)</td>
+<td>(11.4)</td>
 </tr>
 </tbody>
 </table>
-<p>예를 들어 고객우선순위가 1인 출고의 피킹 생성은 조정값 90(=100−1×10), 우선순위 2는 80이 되어, 같은 <code>CREATE_PICKING_TASK</code>(기본 우선순위 70)라도 실행 우선순위가 160 vs 150으로 갈린다. 따라서 급한 고객의 피킹이 먼저 실행된다.</p>
+<ul>
+<li>**동적화 효과**: 통상 운영에선 생성 액션이 한 사이클에 모두 실행되므로 조정값은 실행 순서만 바꾼다. 그러나 **예산(max_actions_per_cycle) 초과·대량 폭주** 등 경합 상황에선 이 값이 실제 처리 순서를 가른다(예: 결품 심각·납기 임박 발주가 먼저).</li>
+<li>**상한 = 기존 고정값**: 가장 급한 인스턴스면 조정값이 상한에 근접(≈이전 고정값), 덜 급하면 낮아진다. <code>base + 조정 ≤ base + 상한</code>이라 상위 유형(자원 액션 base 80~100)을 침범하지 않는다(자원해제 최우선 보존).</li>
+<li>**<code>ALLOCATE_TEAM</code> 통일**: 이전엔 ResourceAgent(B단계)가 고정 30을 냈으나, 이제 **A·B 양 경로 모두 Dispatch Score**(마감긴급·대기·짧은작업·동선 / 입고경과·출고필요…)로 산출한다.</li>
+<li>factors 값은 exec 로그의 사유/인수에 기록되어 실행 순서 로그 설명 패널에서 검증된다.</li>
+</ul>
+<p>도메인 Agent는 <code>[InboundAgent, PutawayAgent, PickingAgent, OutboundAgent, ResourceAgent, AutoOrderAgent]</code> 6종이며 각자 위 Action만 제안한다. PutawayAgent는 적치 위치가 없으면 <code>PUTAWAY_BLOCKED</code>(자동실행 불가 알림)도 낸다. A단계 자원 액션(<code>FINISH_ZONE_LEG</code>·<code>START_ZONE_WORK</code>)은 ZoneScheduler가 고정 조정값(각 50·45)으로 낸다.</p>
+<p>예: 결품 심각도 0.6·납기 임박(1.0)·소진위험 HIGH(1.0)인 발주는 조정 <code>40·0.6+20·1.0+10·1.0=54</code>, base 55와 합쳐 실행 우선순위 109. 결품이 경미하고 납기 여유면 조정이 낮아져 뒤로 밀린다. 고객우선순위는 피킹 생성 조정에만 쓰이고 Dispatch Score(팀 배정)에는 쓰이지 않는다.</p>
 <p>참고: 고객우선순위는 이 <code>priority_score</code>(피킹 작업을 언제 생성할지)에만 반영되고, 작업팀 배정 점수인 Dispatch Score(11.4)에는 사용되지 않는다. 두 판단은 서로 다른 단계이다.</p>
 <h3 id="11.3.5-policy-gate-검증">11.3.5 Policy Gate 검증</h3>
 <p>자동운영은 Action을 만들었다고 바로 실행하지 않는다. 실행 전에는 두 종류의 정책 검토가 있다.</p>

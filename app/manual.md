@@ -1898,18 +1898,26 @@ effective_priority = action_type_base_priority + priority_score
 
 같은 우선순위에서는 `idempotency_key` 또는 `target_id`를 기준으로 결정론적으로 정렬한다.
 
-`priority_score`는 Action을 제안한 도메인 Agent가 정한 조정값이며, Action 유형별로 다음과 같이 정해진다.
+`priority_score`는 Action을 제안한 Agent가 정한 조정값이며, **각 Action 유형은 특정 Agent가 고정적으로 제안**하되 **조정값은 모두 상황에 따라 동적으로 산출**된다(Dispatch Score와 같은 스타일: 각 factor 0~1 정규화 후 가중합, **가중치 합 = 상한**). 유형별 산식은 다음과 같다.
 
-| Action 유형 | priority_score(조정) | 근거 |
-|---|---:|---|
-| `CREATE_PICKING_TASK` | 100 − 고객우선순위 × 10 | 고객우선순위가 높은(값이 작은) 출고의 피킹을 먼저 생성 |
-| `PLACE_REPLENISHMENT_ORDER` | 70 | 결품 대응 발주 |
-| `CREATE_SHIPPING_TASK` | 55~60 | 출고확정 대기 작업 생성(경로별) |
-| `CREATE_INBOUND_TASK` | 50 | 입고 처리 |
-| `CREATE_PUTAWAY_TASK` | 40 | 적치 작업 생성 |
-| `ALLOCATE_TEAM` | = Dispatch Score | 11.4 참조 |
+| Action 유형 | 제안 Agent | priority_score(조정) 산식 | 상한 |
+|---|---|---|---:|
+| `CREATE_PICKING_TASK` | PickingAgent | `100 − 고객우선순위 × 10` | 90 |
+| `REPRIORITIZE_PICKING_TASK` | OutboundAgent | `45·납기긴급 + 15·대기` | 60 |
+| `CREATE_SHIPPING_TASK` | OutboundAgent | `40·납기긴급 + 15·대기` | 55 |
+| `PLACE_REPLENISHMENT_ORDER` | AutoOrderAgent | `40·결품심각도 + 20·납기긴급 + 10·소진위험` | 70 |
+| `CREATE_INBOUND_TASK` | InboundAgent | `30·출고필요 + 12·냉장 + 8·물량` | 50 |
+| `CREATE_PUTAWAY_TASK` | PutawayAgent | `24·출고필요 + 10·냉장 + 6·물량` | 40 |
+| `ALLOCATE_TEAM` | ResourceAgent / ZoneScheduler | **= Dispatch Score**(양 경로 통일) | (11.4) |
 
-예를 들어 고객우선순위가 1인 출고의 피킹 생성은 조정값 90(=100−1×10), 우선순위 2는 80이 되어, 같은 `CREATE_PICKING_TASK`(기본 우선순위 70)라도 실행 우선순위가 160 vs 150으로 갈린다. 따라서 급한 고객의 피킹이 먼저 실행된다.
+- **동적화 효과**: 통상 운영에선 생성 액션이 한 사이클에 모두 실행되므로 조정값은 실행 순서만 바꾼다. 그러나 **예산(max_actions_per_cycle) 초과·대량 폭주** 등 경합 상황에선 이 값이 실제 처리 순서를 가른다(예: 결품 심각·납기 임박 발주가 먼저).
+- **상한 = 기존 고정값**: 가장 급한 인스턴스면 조정값이 상한에 근접(≈이전 고정값), 덜 급하면 낮아진다. `base + 조정 ≤ base + 상한`이라 상위 유형(자원 액션 base 80~100)을 침범하지 않는다(자원해제 최우선 보존).
+- **`ALLOCATE_TEAM` 통일**: 이전엔 ResourceAgent(B단계)가 고정 30을 냈으나, 이제 **A·B 양 경로 모두 Dispatch Score**(마감긴급·대기·짧은작업·동선 / 입고경과·출고필요…)로 산출한다.
+- factors 값은 exec 로그의 사유/인수에 기록되어 실행 순서 로그 설명 패널에서 검증된다.
+
+도메인 Agent는 `[InboundAgent, PutawayAgent, PickingAgent, OutboundAgent, ResourceAgent, AutoOrderAgent]` 6종이며 각자 위 Action만 제안한다. PutawayAgent는 적치 위치가 없으면 `PUTAWAY_BLOCKED`(자동실행 불가 알림)도 낸다. A단계 자원 액션(`FINISH_ZONE_LEG`·`START_ZONE_WORK`)은 ZoneScheduler가 고정 조정값(각 50·45)으로 낸다.
+
+예: 결품 심각도 0.6·납기 임박(1.0)·소진위험 HIGH(1.0)인 발주는 조정 `40·0.6+20·1.0+10·1.0=54`, base 55와 합쳐 실행 우선순위 109. 결품이 경미하고 납기 여유면 조정이 낮아져 뒤로 밀린다. 고객우선순위는 피킹 생성 조정에만 쓰이고 Dispatch Score(팀 배정)에는 쓰이지 않는다.
 
 참고: 고객우선순위는 이 `priority_score`(피킹 작업을 언제 생성할지)에만 반영되고, 작업팀 배정 점수인 Dispatch Score(11.4)에는 사용되지 않는다. 두 판단은 서로 다른 단계이다.
 

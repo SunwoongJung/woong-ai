@@ -273,7 +273,7 @@ class SessionState(TypedDict):
 
 **실행 우선순위** — `effective_priority = action_type_base_priority + priority_score`, 내림차순 정렬(동점은 `idempotency_key`/`target_id` 사전순).
 - base: FINISH 100·START 90·ALLOCATE 80·CREATE_PICKING 70·…·CREATE_INBOUND 40 (표에 없으면 30).
-- `priority_score`(조정): 피킹생성 = `100 − 고객우선순위×10`, 발주 70·입고 50·적치 40(고정), ALLOCATE = Dispatch Score.
+- `priority_score`(조정) — **각 Action은 특정 Agent가 고정 제안, 조정값은 모두 동적**(factor 0~1 가중합, 가중치 합=상한). 피킹생성(PickingAgent) `100−고객우선순위×10`, 발주(AutoOrderAgent) `40·결품심각+20·납기긴급+10·소진위험`(≤70), 입고생성(InboundAgent) `30·출고필요+12·냉장+8·물량`(≤50), 적치생성(PutawayAgent) `24·출고필요+10·냉장+6·물량`(≤40), 피킹재정렬(OutboundAgent) `45·납기긴급+15·대기`(≤60), 출고생성(OutboundAgent) `40·납기긴급+15·대기`(≤55). `ALLOCATE_TEAM`은 **A·B 양 경로 모두 Dispatch Score로 통일**(ResourceAgent B단계 포함). A단계 FINISH·START(ZoneScheduler)는 고정 50·45. 상한=이전 고정값이라 자원 액션(base 80~100)을 침범하지 않음. 통상은 실행순서만 바꾸나 예산초과·폭주 시 처리순서를 가름. 도메인 Agent = `[Inbound, Putaway, Picking, Outbound, Resource, AutoOrder]`.
 
 **Dispatch Score 휴리스틱**(ALLOCATE_TEAM — 어느 작업에 팀을 붙일지):
 - 피킹 = `50·마감긴급 + 25·대기시간 + 15·짧은작업 + 10·동선단순`

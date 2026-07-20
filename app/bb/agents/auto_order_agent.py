@@ -34,9 +34,17 @@ def propose(event: dict) -> list[dict]:
     if not short:
         return []
     desc = ", ".join(f"{s['sku']}(부족 {s['qty']})" for s in short)
+    # 동적 조정(상한 70) = 40·결품심각도 + 20·납기긴급 + 10·소진위험
+    from bb.agents import _score
+    total_req = sum(ln["qty"] for ln in q("SELECT qty FROM outbound_order_lines WHERE order_no=?", (order_no,))) or 1
+    sev = _score.c01(sum(s["qty"] for s in short) / total_req)
+    du = _score.due_urgency((q("SELECT due_datetime FROM outbound_orders WHERE order_no=?", (order_no,)) or [{}])[0].get("due_datetime"))
+    risk = max((_score.stockout_risk(s["sku"]) for s in short), default=0.0)
+    ps = round(40 * sev + 20 * du + 10 * risk, 1)
     return [dict(agent_name=NAME, action_type="PLACE_REPLENISHMENT_ORDER",
                  idempotency_key=f"PLACE_REPLENISHMENT_ORDER:{order_no}", event_id=event["event_id"],
                  target_type="order", target_id=order_no,
                  payload={"order_no": order_no, "shortage": short},
-                 priority_score=70.0, auto_executable=True,
-                 reason=f"출고 {order_no} 결품 — 부족분 발주 후 재고 도착 대기: {desc}")]
+                 priority_score=ps, auto_executable=True,
+                 reason=f"출고 {order_no} 결품 — 부족분 발주 후 재고 도착 대기: {desc} "
+                        f"— 조정 {ps}(결품심각 {sev:.2f}·납기긴급 {du:.2f}·소진위험 {risk:.2f})")]

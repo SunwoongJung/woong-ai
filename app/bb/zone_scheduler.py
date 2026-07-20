@@ -109,15 +109,44 @@ def _stock_cand(r, now_dt, zmap, pend):
                               "pending_outbound_qty": pend.get(r.get("sku"), 0), "inbound_qty": inq}}
 
 
+def _zmap() -> dict:
+    return {r["zone_id"]: (r["work_minutes"] if r["work_minutes"] is not None else 10.0)
+            for r in q("SELECT zone_id, work_minutes FROM zones")}
+
+
+def _pending_outbound() -> dict:
+    return {r["sku"]: r["s"] for r in q("""SELECT l.sku, COALESCE(SUM(l.qty),0) s
+              FROM outbound_order_lines l JOIN outbound_orders o ON o.order_no=l.order_no
+              WHERE o.status IN ('PLANNED','ALLOCATED','PICKING_ISSUED') GROUP BY l.sku""")}
+
+
+def dispatch_score_for(task_id: str, kind: str) -> dict:
+    """단일 작업의 dispatch_score + score_factors — ResourceAgent(B단계) ALLOCATE_TEAM 통일용.
+    ZoneScheduler(A단계)와 동일 산식(_pick_cand/_stock_cand)을 재사용한다."""
+    now_dt = _dt(now()) or datetime.now()
+    zmap = _zmap()
+    if kind == "picking":
+        r = q("""SELECT p.picking_task_id id, p.issued_at, p.zone_sequence, p.zone_index, o.due_datetime
+                 FROM picking_tasks p LEFT JOIN outbound_orders o ON o.order_no=p.order_no
+                 WHERE p.picking_task_id=?""", (task_id,))
+        c = _pick_cand(dict(r[0]), now_dt, zmap) if r else None
+    else:
+        r = q("""SELECT s.stocking_task_id id, s.issued_at, s.zone_id, i.sku, i.qty,
+                        i.received_datetime, i.expected_date
+                 FROM stocking_tasks s LEFT JOIN inbound_orders i ON i.inbound_no=s.inbound_no
+                 WHERE s.stocking_task_id=?""", (task_id,))
+        c = _stock_cand(dict(r[0]), now_dt, zmap, _pending_outbound()) if r else None
+    if not c:
+        return {"dispatch_score": 0.0, "score_factors": {}}
+    return {"dispatch_score": c["dispatch_score"], "score_factors": c["score_factors"]}
+
+
 def _dispatch_candidates(now_override=None) -> list[dict]:
     """ISSUED·미배정 피킹/적치를 dispatch_score로 정렬. 각 후보에 eligible(현재 zone 여유) 표시.
     정렬: dispatch_score DESC → issued_at ASC → task_id."""
     now_dt = _dt(now_override or now()) or datetime.now()
-    zmap = {r["zone_id"]: (r["work_minutes"] if r["work_minutes"] is not None else 10.0)
-            for r in q("SELECT zone_id, work_minutes FROM zones")}
-    pend = {r["sku"]: r["s"] for r in q("""SELECT l.sku, COALESCE(SUM(l.qty),0) s
-              FROM outbound_order_lines l JOIN outbound_orders o ON o.order_no=l.order_no
-              WHERE o.status IN ('PLANNED','ALLOCATED','PICKING_ISSUED') GROUP BY l.sku""")}
+    zmap = _zmap()
+    pend = _pending_outbound()
     cands = []
     for r in q("""SELECT p.picking_task_id id, p.issued_at, p.zone_sequence, p.zone_index, o.due_datetime
                   FROM picking_tasks p LEFT JOIN outbound_orders o ON o.order_no=p.order_no

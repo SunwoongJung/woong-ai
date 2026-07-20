@@ -128,13 +128,15 @@ def run_once(force: bool = False, step_delay: float | None = None) -> dict:
                                             "type": spec["action_type"], "status": "POLICY_BLOCKED",
                                             "reason": block})
                     exec_log.record(spec["action_type"], base, eff, tgt, "POLICY_BLOCKED",
+                                    factors=(spec.get("payload") or {}).get("score_factors"),
                                     reason=f"{spec.get('reason') or ''} — [차단] {block}")
                 else:
                     r = executor.execute(res["action_id"])
                     out["executed"].append({"action_id": res["action_id"], "agent": spec["agent_name"],
                                             "type": spec["action_type"], "status": r.get("status"),
                                             "reason": r.get("reason")})
-                    exec_log.record(spec["action_type"], base, eff, tgt, str(r.get("status")), reason=spec.get("reason"))
+                    exec_log.record(spec["action_type"], base, eff, tgt, str(r.get("status")),
+                                    factors=(spec.get("payload") or {}).get("score_factors"), reason=spec.get("reason"))
                 budget -= 1
                 if step_delay > 0:
                     time.sleep(step_delay)   # 한 건씩 가시화(사람이 흐름을 볼 수 있게)

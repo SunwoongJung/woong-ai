@@ -54,10 +54,14 @@ def propose(event: dict) -> list[dict]:
     team = _free_team()
     if not team:
         return []
+    from bb import zone_scheduler   # 지연 임포트(순환 방지) — A/B단계 배정 점수 통일
+    sc = zone_scheduler.dispatch_score_for(tid, kind)
+    ps = sc["dispatch_score"]
     return [dict(agent_name=NAME, action_type="ALLOCATE_TEAM",
                  idempotency_key=f"ALLOCATE_TEAM:{tid}", event_id=event["event_id"],
                  target_type="task", target_id=tid,
-                 payload={"task_id": tid, "kind": kind, **team},
-                 priority_score=30.0, auto_executable=True,
-                 reason=f"작업 {tid}에 team(작업자 {team['worker_id']}/{team['worker_id_2']}, "
-                        f"지게차 {team['forklift_id']}) 자동 배정")]
+                 payload={"task_id": tid, "kind": kind, "dispatch_score": ps,
+                          "score_factors": sc["score_factors"], **team},
+                 priority_score=ps, auto_executable=True,
+                 reason=f"작업 {tid} dispatch_score {ps} → team(작업자 {team['worker_id']}/{team['worker_id_2']}, "
+                        f"지게차 {team['forklift_id']}) 배정")]
